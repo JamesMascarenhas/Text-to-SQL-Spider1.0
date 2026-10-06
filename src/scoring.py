@@ -15,8 +15,10 @@ import argparse
 import asyncio
 import copy
 import json
+import sqlite3
 import subprocess
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -55,7 +57,7 @@ from evaluation import (  # noqa: E402
     rebuild_sql_col,
     rebuild_sql_val,
 )
-from exec_eval import eval_exec_match, exec_on_db, postprocess  # noqa: E402
+from exec_eval import eval_exec_match, exec_on_db, postprocess, replace_cur_year  # noqa: E402
 from parse import get_all_preds_for_execution, remove_distinct  # noqa: E402
 
 
@@ -81,6 +83,17 @@ officialEvaluator = Evaluator()
 # past this many combinations we skip the plugging and fall back to plain ex for that example
 maxValueCombinations = 1000
 
+# the official execution has a 60 second timeout that never actually fires
+# it wraps a blocking sqlite call in asyncio.wait_for and the blocking call never gives the timer a chance to check
+# so a query that never finishes like a join with no join condition hangs everything including the official script
+# every prediction gets one run of our own first with a real limit using sqlite's progress handler
+# every gold query in spider finishes in well under a second so 30 seconds is generous
+predTimeLimitSeconds = 30
+
+# plugging reruns the prediction once per combination so slow queries times many combinations also add up
+# skip plugging when that estimate goes past this
+pluggingBudgetSeconds = 120
+
 # loaded once and reused since reading every database schema over and over is slow
 schemaCache = {}
 foreignKeyMaps = None
@@ -101,6 +114,52 @@ def loadForeignKeyMaps() -> dict:
         foreignKeyMaps = build_foreign_key_map_from_json(str(tablesJsonPath))
 
     return foreignKeyMaps
+
+
+def decodeIgnoringBadBytes(rawBytes: bytes) -> str:
+    # same as the official connection so broken characters are handled the same way
+    return rawBytes.decode(errors = "ignore")
+
+
+def timePrediction(dbPathText: str, predText: str) -> tuple:
+    """
+    runs the prediction once with a real time limit and says how it went and how long it took
+    status is finished or timed_out or error
+    the same cleanup as the official execution so the query that runs here is the one it would run
+    """
+    query = replace_cur_year(postprocess(predText))
+
+    connection = sqlite3.connect(dbPathText)
+    connection.text_factory = decodeIgnoringBadBytes
+
+    deadline = time.monotonic() + predTimeLimitSeconds
+
+    # sqlite calls this every few thousand steps and stops the query as soon as it returns nonzero
+    def pastDeadline():
+        if time.monotonic() > deadline:
+            return 1
+        return 0
+
+    connection.set_progress_handler(pastDeadline, 10000)
+
+    startTime = time.monotonic()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(query)
+        cursor.fetchall()
+        status = "finished"
+    except sqlite3.OperationalError as error:
+        # interrupted is what sqlite says when the progress handler stops it
+        if "interrupted" in str(error):
+            status = "timed_out"
+        else:
+            status = "error"
+    except Exception:
+        status = "error"
+    finally:
+        connection.close()
+
+    return status, time.monotonic() - startTime
 
 
 def countValueCombinations(predText: str, goldSql: str) -> int:
@@ -131,8 +190,10 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
     ex_gold_values is execution accuracy the way the spider paper defines it
     the model gets the gold values and only the structure is judged
     our models write their own values so plain ex is the main number and this one is an upper bound
-    ex_gold_values_capped is true when plugging would need more than maxValueCombinations tries
+    ex_gold_values_capped is true when plugging was skipped because of too many combinations or too slow a query
     those examples just keep their plain ex result so for them its a lower bound instead
+    timed_out is true when the prediction didnt finish within predTimeLimitSeconds
+    those count as wrong on ex and skip the official execution entirely since it would hang on them
 
     two extra checks the official script doesnt do
       em_parse_ok   false when spiders 2018 parser couldnt read the prediction
@@ -154,6 +215,7 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
             "exec_error": "no prediction",
             "ex_gold_values": 0,
             "ex_gold_values_capped": False,
+            "timed_out": False,
         }
 
     # the official script does this swap because old models wrote the word value as a placeholder
@@ -167,9 +229,36 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         parsedPred = copy.deepcopy(emptyParsedSql)
         parseOk = False
 
+    # em compares parsed clauses after lining up column references the same way the official script does
+    foreignKeyMap = loadForeignKeyMaps()[dbId]
+
+    goldColumnUnits = build_valid_col_units(parsedGold["from"]["table_units"], schema)
+    goldForCompare = rebuild_sql_col(goldColumnUnits, rebuild_sql_val(parsedGold), foreignKeyMap)
+
+    predColumnUnits = build_valid_col_units(parsedPred["from"]["table_units"], schema)
+    predForCompare = rebuild_sql_col(predColumnUnits, rebuild_sql_val(parsedPred), foreignKeyMap)
+
+    emCorrect = int(bool(officialEvaluator.eval_exact_match(predForCompare, goldForCompare)))
+
+
+    # one timed run of our own first since the official execution would hang forever on a query that never finishes
+    dbPathText = str(getDbPath(dbId))
+    runStatus, runSeconds = timePrediction(dbPathText, predText)
+
+    if runStatus == "timed_out":
+        return {
+            "difficulty": difficulty,
+            "em": emCorrect,
+            "ex": 0,
+            "em_parse_ok": parseOk,
+            "exec_error": f"timed out after {predTimeLimitSeconds} seconds",
+            "ex_gold_values": 0,
+            "ex_gold_values_capped": True,
+            "timed_out": True,
+        }
+
     # does the prediction run at all
     # same execution helper the official script uses so errors are judged the same way
-    dbPathText = str(getDbPath(dbId))
     execFlag, execResult = asyncio.run(exec_on_db(dbPathText, postprocess(predText)))
 
     if execFlag == "result":
@@ -189,8 +278,9 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
     # the official helper runs the prediction as written first and then every way of filling its value slots with gold values
     # it counts as correct if any of those match so its lenient on purpose
     nCombinations = countValueCombinations(predText, goldSql)
+    estimatedPluggingSeconds = nCombinations * runSeconds
 
-    if nCombinations > maxValueCombinations:
+    if nCombinations > maxValueCombinations or estimatedPluggingSeconds > pluggingBudgetSeconds:
         exGoldValuesCorrect = exCorrect
         goldValuesCapped = True
     else:
@@ -204,17 +294,6 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         )
         goldValuesCapped = False
 
-    # em compares parsed clauses after lining up column references the same way the official script does
-    foreignKeyMap = loadForeignKeyMaps()[dbId]
-
-    goldColumnUnits = build_valid_col_units(parsedGold["from"]["table_units"], schema)
-    goldForCompare = rebuild_sql_col(goldColumnUnits, rebuild_sql_val(parsedGold), foreignKeyMap)
-
-    predColumnUnits = build_valid_col_units(parsedPred["from"]["table_units"], schema)
-    predForCompare = rebuild_sql_col(predColumnUnits, rebuild_sql_val(parsedPred), foreignKeyMap)
-
-    emCorrect = int(bool(officialEvaluator.eval_exact_match(predForCompare, goldForCompare)))
-
     return {
         "difficulty": difficulty,
         "em": emCorrect,
@@ -223,6 +302,7 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         "exec_error": execError,
         "ex_gold_values": int(exGoldValuesCorrect),
         "ex_gold_values_capped": goldValuesCapped,
+        "timed_out": False,
     }
 
 
@@ -391,8 +471,15 @@ def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> 
     officialDir = outDir / "official_eval"
     officialDir.mkdir(parents = True, exist_ok = True)
 
-    # em and ex and component matching use every example
-    goldFilePath, predFilePath = writeOfficialInputs(rows, officialDir, runTag)
+    # the official run would hang on predictions that never finish so those are left out of this check
+    finishedRows = []
+    for row in rows:
+        if not row["timed_out"]:
+            finishedRows.append(row)
+
+    nTimedOut = len(rows) - len(finishedRows)
+
+    goldFilePath, predFilePath = writeOfficialInputs(finishedRows, officialDir, runTag)
     standardOutput = runOfficialScript(
         goldFilePath, predFilePath, officialDir / f"{runTag}_official.txt", ["--etype", "all"]
     )
@@ -418,12 +505,12 @@ def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> 
         "ex_gold_values_uncapped": readMetricRow(goldValuesOutput, "execution"),
     }
 
-    ourScores = summarizeScores(rows)["all"]
+    ourFinishedScores = summarizeScores(finishedRows)["all"]
     ourUncappedScores = summarizeScores(uncappedRows)["all"]
 
     checks = [
-        ("em", officialScores["em"], ourScores["em"]),
-        ("ex", officialScores["ex"], ourScores["ex"]),
+        ("em", officialScores["em"], ourFinishedScores["em"]),
+        ("ex", officialScores["ex"], ourFinishedScores["ex"]),
         ("ex_gold_values on uncapped examples", officialScores["ex_gold_values_uncapped"], ourUncappedScores["ex_gold_values"]),
     ]
 
@@ -433,9 +520,11 @@ def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> 
 
     officialScores["component_matching"] = readComponentMatching(standardOutput)
     officialScores["n_gold_values_capped"] = nCapped
+    officialScores["n_timed_out"] = nTimedOut
 
     print(
         f"cross check passed with official EM {officialScores['em']:.3f} and EX {officialScores['ex']:.3f} "
+        f"on the {len(finishedRows)} examples that finish with {nTimedOut} timed out "
         f"and EX with gold values {officialScores['ex_gold_values_uncapped']:.3f} on the {len(uncappedRows)} uncapped examples "
         f"with {nCapped} capped"
     )
@@ -475,13 +564,17 @@ def countDiagnostics(rows: list) -> dict:
         parseFailButRunsCorrect = parseFailButRunsCorrect + row["ex"]
 
     cappedCount = 0
+    timedOutCount = 0
     for row in rows:
         if row["ex_gold_values_capped"]:
             cappedCount = cappedCount + 1
+        if row["timed_out"]:
+            timedOutCount = timedOutCount + 1
 
     return {
         "n_examples": len(rows),
         "gold_values_capped": cappedCount,
+        "timed_out": timedOutCount,
         "invalid_outputs": len(rows) - len(validRows),
         "execution_errors": execErrorCount,
         "em_parse_failures": len(parseFailRows),
@@ -493,7 +586,8 @@ def countDiagnostics(rows: list) -> dict:
 
 def printDiagnostics(diagnostics: dict):
     print(f"invalid outputs with no sql extracted {diagnostics['invalid_outputs']}")
-    print(f"examples where gold value plugging was skipped for having over {maxValueCombinations} combinations {diagnostics['gold_values_capped']}")
+    print(f"predictions that didnt finish within {predTimeLimitSeconds} seconds and count as wrong {diagnostics['timed_out']}")
+    print(f"examples where gold value plugging was skipped for too many combinations or too slow a query {diagnostics['gold_values_capped']}")
     print(f"execution errors among valid outputs {diagnostics['execution_errors']}")
     print(
         f"em parser failures on valid outputs {diagnostics['em_parse_failures']} "

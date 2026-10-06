@@ -217,6 +217,7 @@ def classifyError(row: dict) -> str:
     puts each example in exactly one bucket checked in this order
       correct      ex says right
       no_sql       nothing could be extracted
+      timeout      the query never finished within the scorers time limit
       crash        the query errors on the database
       value_only   runs and is wrong but becomes right once gold values go in
       structural   runs and is wrong even with gold values so the structure itself is off
@@ -228,6 +229,10 @@ def classifyError(row: dict) -> str:
     if row.get("pred_sql") is None:
         return "no_sql"
 
+    # older scored files dont have this field and none of them had timeouts
+    if row.get("timed_out", False):
+        return "timeout"
+
     if row["exec_error"] is not None:
         return "crash"
 
@@ -238,7 +243,7 @@ def classifyError(row: dict) -> str:
 
 
 def buildErrorTable(runs: list) -> list:
-    buckets = ["correct", "no_sql", "crash", "value_only", "structural"]
+    buckets = ["correct", "no_sql", "timeout", "crash", "value_only", "structural"]
     tableRows = []
 
     for run in runs:
@@ -572,7 +577,7 @@ def main():
 
     sections.append("\n## Error breakdown\n")
     sections.append(toMarkdown(errorRows, [
-        "run", "wrong", "no_sql", "crash", "value_only", "structural",
+        "run", "wrong", "no_sql", "timeout", "crash", "value_only", "structural",
         "crash_share_of_wrong", "value_only_share_of_wrong", "structural_share_of_wrong",
     ]))
 
