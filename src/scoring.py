@@ -56,6 +56,7 @@ from evaluation import (  # noqa: E402
     rebuild_sql_val,
 )
 from exec_eval import eval_exec_match, exec_on_db, postprocess  # noqa: E402
+from parse import get_all_preds_for_execution, remove_distinct  # noqa: E402
 
 
 # what the official script swaps in when a prediction cant be parsed
@@ -74,6 +75,11 @@ emptyParsedSql = {
 }
 
 officialEvaluator = Evaluator()
+
+# the gold value check tries every way of filling a predictions value slots with the gold values
+# that grows exponentially so a messy prediction with lots of literals can need trillions of tries
+# past this many combinations we skip the plugging and fall back to plain ex for that example
+maxValueCombinations = 1000
 
 # loaded once and reused since reading every database schema over and over is slow
 schemaCache = {}
@@ -97,6 +103,16 @@ def loadForeignKeyMaps() -> dict:
     return foreignKeyMaps
 
 
+def countValueCombinations(predText: str, goldSql: str) -> int:
+    # same cleanup the official execution check does before it starts plugging so the count matches what it would try
+    predClean = remove_distinct(postprocess(predText))
+    goldClean = remove_distinct(postprocess(goldSql))
+
+    nCombinations, _ = get_all_preds_for_execution(goldClean, predClean)
+
+    return nCombinations
+
+
 def getDifficulty(goldSql: str, dbId: str) -> str:
     # the official label so our difficulty buckets match every other paper on spider
     schema = loadSchema(dbId)
@@ -115,6 +131,8 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
     ex_gold_values is execution accuracy the way the spider paper defines it
     the model gets the gold values and only the structure is judged
     our models write their own values so plain ex is the main number and this one is an upper bound
+    ex_gold_values_capped is true when plugging would need more than maxValueCombinations tries
+    those examples just keep their plain ex result so for them its a lower bound instead
 
     two extra checks the official script doesnt do
       em_parse_ok   false when spiders 2018 parser couldnt read the prediction
@@ -135,6 +153,7 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
             "em_parse_ok": False,
             "exec_error": "no prediction",
             "ex_gold_values": 0,
+            "ex_gold_values_capped": False,
         }
 
     # the official script does this swap because old models wrote the word value as a placeholder
@@ -169,14 +188,21 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
 
     # the official helper runs the prediction as written first and then every way of filling its value slots with gold values
     # it counts as correct if any of those match so its lenient on purpose
-    exGoldValuesCorrect = eval_exec_match(
-        db = dbPathText,
-        p_str = predText,
-        g_str = goldSql,
-        plug_value = True,
-        keep_distinct = False,
-        progress_bar_for_each_datapoint = False,
-    )
+    nCombinations = countValueCombinations(predText, goldSql)
+
+    if nCombinations > maxValueCombinations:
+        exGoldValuesCorrect = exCorrect
+        goldValuesCapped = True
+    else:
+        exGoldValuesCorrect = eval_exec_match(
+            db = dbPathText,
+            p_str = predText,
+            g_str = goldSql,
+            plug_value = True,
+            keep_distinct = False,
+            progress_bar_for_each_datapoint = False,
+        )
+        goldValuesCapped = False
 
     # em compares parsed clauses after lining up column references the same way the official script does
     foreignKeyMap = loadForeignKeyMaps()[dbId]
@@ -196,6 +222,7 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         "em_parse_ok": parseOk,
         "exec_error": execError,
         "ex_gold_values": int(exGoldValuesCorrect),
+        "ex_gold_values_capped": goldValuesCapped,
     }
 
 
@@ -335,17 +362,9 @@ def readComponentMatching(officialOutput: str) -> dict:
     return componentMatching
 
 
-def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> dict:
-    """
-    runs the untouched official script on the same predictions and compares totals
-    once as normal for em and ex and component matching and once with gold values plugged in
-    if either ever disagrees our per example scores cant be trusted so it stops everything
-    """
-    officialDir = outDir / "official_eval"
-    officialDir.mkdir(parents = True, exist_ok = True)
-
-    goldFilePath = officialDir / f"{runTag}_gold.sql"
-    predFilePath = officialDir / f"{runTag}_pred.sql"
+def writeOfficialInputs(rows: list, officialDir: Path, fileTag: str) -> tuple:
+    goldFilePath = officialDir / f"{fileTag}_gold.sql"
+    predFilePath = officialDir / f"{fileTag}_pred.sql"
 
     # one query per line in the same order in both files since thats how the script pairs them up
     with open(goldFilePath, "w") as goldFile:
@@ -360,32 +379,65 @@ def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> 
                 predLine = invalidSql
             predFile.write(f"{predLine}\n")
 
+    return goldFilePath, predFilePath
+
+
+def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> dict:
+    """
+    runs the untouched official script on the same predictions and compares totals
+    once as normal for em and ex and component matching and once with gold values plugged in
+    if either ever disagrees our per example scores cant be trusted so it stops everything
+    """
+    officialDir = outDir / "official_eval"
+    officialDir.mkdir(parents = True, exist_ok = True)
+
+    # em and ex and component matching use every example
+    goldFilePath, predFilePath = writeOfficialInputs(rows, officialDir, runTag)
     standardOutput = runOfficialScript(
         goldFilePath, predFilePath, officialDir / f"{runTag}_official.txt", ["--etype", "all"]
     )
+
+    # the official plug check has no cap so it would hang on the same examples ours skips
+    # so this cross check runs on every example except the capped ones and compares like with like
+    uncappedRows = []
+    for row in rows:
+        if not row["ex_gold_values_capped"]:
+            uncappedRows.append(row)
+
+    nCapped = len(rows) - len(uncappedRows)
+
+    goldValuesGoldPath, goldValuesPredPath = writeOfficialInputs(uncappedRows, officialDir, f"{runTag}_gold_values")
     goldValuesOutput = runOfficialScript(
-        goldFilePath, predFilePath, officialDir / f"{runTag}_official_gold_values.txt", ["--etype", "exec", "--plug_value"]
+        goldValuesGoldPath, goldValuesPredPath, officialDir / f"{runTag}_official_gold_values.txt",
+        ["--etype", "exec", "--plug_value"],
     )
 
     officialScores = {
         "em": readMetricRow(standardOutput, "exact match"),
         "ex": readMetricRow(standardOutput, "execution"),
-        "ex_gold_values": readMetricRow(goldValuesOutput, "execution"),
+        "ex_gold_values_uncapped": readMetricRow(goldValuesOutput, "execution"),
     }
 
     ourScores = summarizeScores(rows)["all"]
+    ourUncappedScores = summarizeScores(uncappedRows)["all"]
 
-    for metric in accuracyMetrics:
-        gap = abs(officialScores[metric] - ourScores[metric])
-        assert gap < tolerance, (
-            f"{metric} disagrees with official {officialScores[metric]:.3f} vs ours {ourScores[metric]:.3f}"
-        )
+    checks = [
+        ("em", officialScores["em"], ourScores["em"]),
+        ("ex", officialScores["ex"], ourScores["ex"]),
+        ("ex_gold_values on uncapped examples", officialScores["ex_gold_values_uncapped"], ourUncappedScores["ex_gold_values"]),
+    ]
+
+    for metricName, officialValue, ourValue in checks:
+        gap = abs(officialValue - ourValue)
+        assert gap < tolerance, f"{metricName} disagrees with official {officialValue:.3f} vs ours {ourValue:.3f}"
 
     officialScores["component_matching"] = readComponentMatching(standardOutput)
+    officialScores["n_gold_values_capped"] = nCapped
 
     print(
         f"cross check passed with official EM {officialScores['em']:.3f} and EX {officialScores['ex']:.3f} "
-        f"and EX with gold values {officialScores['ex_gold_values']:.3f}"
+        f"and EX with gold values {officialScores['ex_gold_values_uncapped']:.3f} on the {len(uncappedRows)} uncapped examples "
+        f"with {nCapped} capped"
     )
 
     return officialScores
@@ -422,8 +474,14 @@ def countDiagnostics(rows: list) -> dict:
     for row in parseFailButRuns:
         parseFailButRunsCorrect = parseFailButRunsCorrect + row["ex"]
 
+    cappedCount = 0
+    for row in rows:
+        if row["ex_gold_values_capped"]:
+            cappedCount = cappedCount + 1
+
     return {
         "n_examples": len(rows),
+        "gold_values_capped": cappedCount,
         "invalid_outputs": len(rows) - len(validRows),
         "execution_errors": execErrorCount,
         "em_parse_failures": len(parseFailRows),
@@ -435,6 +493,7 @@ def countDiagnostics(rows: list) -> dict:
 
 def printDiagnostics(diagnostics: dict):
     print(f"invalid outputs with no sql extracted {diagnostics['invalid_outputs']}")
+    print(f"examples where gold value plugging was skipped for having over {maxValueCombinations} combinations {diagnostics['gold_values_capped']}")
     print(f"execution errors among valid outputs {diagnostics['execution_errors']}")
     print(
         f"em parser failures on valid outputs {diagnostics['em_parse_failures']} "
@@ -453,9 +512,13 @@ def main():
     rows = readJsonl(runPath)
 
     # scores get added onto each row so one file holds the output and how it did
-    for row in rows:
+    for position, row in enumerate(rows):
         scores = scoreExample(row.get("pred_sql"), row["gold"], row["db_id"])
         row.update(scores)
+
+        # a heartbeat every 100 examples so a slow run never looks frozen
+        if (position + 1) % 100 == 0:
+            print(f"  scored {position + 1} of {len(rows)}")
 
     # keeps the original run file untouched next to the scored one
     scoredPath = runPath.with_name(runPath.stem + "_scored.jsonl")
