@@ -3,6 +3,7 @@ scoring for spider predictions on the mac
 the official evaluation.py only prints totals but task 2 needs right or wrong for every single example
 so scoreExample redoes the official per example logic with the official functions
 then crossCheckWithOfficial runs the untouched official script on the same predictions and makes sure the totals agree
+also collects the papers component matching scores from the official output and saves everything to a summary file
 has to run from a terminal or with !python on colab and never inside a notebook cell
 the official execution check uses asyncio.run which breaks inside jupyter
 
@@ -13,6 +14,7 @@ how to run
 import argparse
 import asyncio
 import copy
+import json
 import subprocess
 import sys
 import warnings
@@ -108,7 +110,11 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
     exact set match and execution accuracy for one example
     same default settings as the official script
     values ignored for em and DISTINCT dropped for ex and no gold values plugged in
-    predSql of None means nothing was extracted and counts as wrong on both
+    predSql of None means nothing was extracted and counts as wrong on everything
+
+    ex_gold_values is execution accuracy the way the spider paper defines it
+    the model gets the gold values and only the structure is judged
+    our models write their own values so plain ex is the main number and this one is an upper bound
 
     two extra checks the official script doesnt do
       em_parse_ok   false when spiders 2018 parser couldnt read the prediction
@@ -128,6 +134,7 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
             "ex": 0,
             "em_parse_ok": False,
             "exec_error": "no prediction",
+            "ex_gold_values": 0,
         }
 
     # the official script does this swap because old models wrote the word value as a placeholder
@@ -160,6 +167,17 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         progress_bar_for_each_datapoint = False,
     )
 
+    # the official helper runs the prediction as written first and then every way of filling its value slots with gold values
+    # it counts as correct if any of those match so its lenient on purpose
+    exGoldValuesCorrect = eval_exec_match(
+        db = dbPathText,
+        p_str = predText,
+        g_str = goldSql,
+        plug_value = True,
+        keep_distinct = False,
+        progress_bar_for_each_datapoint = False,
+    )
+
     # em compares parsed clauses after lining up column references the same way the official script does
     foreignKeyMap = loadForeignKeyMaps()[dbId]
 
@@ -177,7 +195,13 @@ def scoreExample(predSql, goldSql: str, dbId: str) -> dict:
         "ex": int(exCorrect),
         "em_parse_ok": parseOk,
         "exec_error": execError,
+        "ex_gold_values": int(exGoldValuesCorrect),
     }
+
+
+# the per example accuracy fields and how they get labelled when printed
+accuracyMetrics = ["em", "ex", "ex_gold_values"]
+metricLabels = {"em": "EM", "ex": "EX", "ex_gold_values": "EX gold vals"}
 
 
 def summarizeScores(rows: list) -> dict:
@@ -198,16 +222,17 @@ def summarizeScores(rows: list) -> dict:
 
         # nan instead of crashing when a level is empty like in tiny test runs
         if nRows == 0:
-            summary[level] = {"n": 0, "em": float("nan"), "ex": float("nan")}
+            summary[level] = {"n": 0}
+            for metric in accuracyMetrics:
+                summary[level][metric] = float("nan")
             continue
 
-        emTotal = 0
-        exTotal = 0
-        for row in levelRows:
-            emTotal = emTotal + row["em"]
-            exTotal = exTotal + row["ex"]
-
-        summary[level] = {"n": nRows, "em": emTotal / nRows, "ex": exTotal / nRows}
+        summary[level] = {"n": nRows}
+        for metric in accuracyMetrics:
+            metricTotal = 0
+            for row in levelRows:
+                metricTotal = metricTotal + row[metric]
+            summary[level][metric] = metricTotal / nRows
 
     return summary
 
@@ -218,8 +243,8 @@ def printSummary(summary: dict, title: str = ""):
 
     columns = difficultyLevels + ["all"]
 
-    headerLine = f"{'':8}"
-    countLine = f"{'n':8}"
+    headerLine = f"{'':14}"
+    countLine = f"{'n':14}"
     for level in columns:
         headerLine = headerLine + f"{level:>10}"
         countLine = countLine + f"{summary[level]['n']:>10}"
@@ -227,24 +252,100 @@ def printSummary(summary: dict, title: str = ""):
     print(headerLine)
     print(countLine)
 
-    for metric in ["em", "ex"]:
-        metricLine = f"{metric.upper():8}"
+    for metric in accuracyMetrics:
+        metricLine = f"{metricLabels[metric]:14}"
         for level in columns:
             metricLine = metricLine + f"{summary[level][metric]:>10.3f}"
         print(metricLine)
 
 
+def runOfficialScript(goldFilePath, predFilePath, logFilePath, extraArgs: list) -> str:
+    command = [
+        sys.executable, "evaluation.py",
+        "--gold", str(goldFilePath),
+        "--pred", str(predFilePath),
+        "--db", str(dbDir),
+        "--table", str(tablesJsonPath),
+    ]
+    command = command + extraArgs
+
+    # run from inside the eval folder since the script imports its neighbour files
+    result = subprocess.run(command, cwd = evalDir, capture_output = True, text = True)
+    logFilePath.write_text(result.stdout + "\n" + result.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"official evaluation failed so check {logFilePath}")
+
+    return result.stdout
+
+
+def readMetricRow(officialOutput: str, rowStart: str) -> float:
+    # the last number on each row of the printed table is the all column
+    for line in officialOutput.splitlines():
+        if line.startswith(rowStart):
+            return float(line.split()[-1])
+
+    raise ValueError(f"no {rowStart} row in the official output")
+
+
+def readComponentMatching(officialOutput: str) -> dict:
+    """
+    pulls the papers component matching tables out of the official printout
+    the official script calls it partial matching and prints accuracy then recall then f1
+    each line is a component name followed by easy medium hard extra all
+    some names have spaces like select(no AGG) so the name is everything before the last five numbers
+    """
+    sectionMarkers = {
+        "PARTIAL MATCHING ACCURACY": "accuracy",
+        "PARTIAL MATCHING RECALL": "recall",
+        "PARTIAL MATCHING F1": "f1",
+    }
+    columns = difficultyLevels + ["all"]
+
+    componentMatching = {}
+    currentSection = None
+
+    for line in officialOutput.splitlines():
+        matchedMarker = None
+        for marker, sectionName in sectionMarkers.items():
+            if marker in line:
+                matchedMarker = sectionName
+        if matchedMarker is not None:
+            currentSection = matchedMarker
+            componentMatching[currentSection] = {}
+            continue
+
+        if currentSection is None:
+            continue
+
+        tokens = line.split()
+
+        # a blank line or a new banner ends the section
+        if len(tokens) < len(columns) + 1 or line.startswith("="):
+            currentSection = None
+            continue
+
+        componentName = " ".join(tokens[:-len(columns)])
+        values = tokens[-len(columns):]
+
+        componentMatching[currentSection][componentName] = {}
+        for level, value in zip(columns, values):
+            componentMatching[currentSection][componentName][level] = float(value)
+
+    return componentMatching
+
+
 def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> dict:
     """
     runs the untouched official script on the same predictions and compares totals
-    if this ever disagrees our per example scores cant be trusted so it stops everything
+    once as normal for em and ex and component matching and once with gold values plugged in
+    if either ever disagrees our per example scores cant be trusted so it stops everything
     """
     officialDir = outDir / "official_eval"
     officialDir.mkdir(parents = True, exist_ok = True)
 
     goldFilePath = officialDir / f"{runTag}_gold.sql"
     predFilePath = officialDir / f"{runTag}_pred.sql"
-    logFilePath = officialDir / f"{runTag}_official.txt"
 
     # one query per line in the same order in both files since thats how the script pairs them up
     with open(goldFilePath, "w") as goldFile:
@@ -259,47 +360,45 @@ def crossCheckWithOfficial(rows: list, runTag: str, tolerance: float = 1e-3) -> 
                 predLine = invalidSql
             predFile.write(f"{predLine}\n")
 
-    command = [
-        sys.executable, "evaluation.py",
-        "--gold", str(goldFilePath),
-        "--pred", str(predFilePath),
-        "--db", str(dbDir),
-        "--table", str(tablesJsonPath),
-        "--etype", "all",
-    ]
+    standardOutput = runOfficialScript(
+        goldFilePath, predFilePath, officialDir / f"{runTag}_official.txt", ["--etype", "all"]
+    )
+    goldValuesOutput = runOfficialScript(
+        goldFilePath, predFilePath, officialDir / f"{runTag}_official_gold_values.txt", ["--etype", "exec", "--plug_value"]
+    )
 
-    # run from inside the eval folder since the script imports its neighbour files
-    result = subprocess.run(command, cwd = evalDir, capture_output = True, text = True)
-    logFilePath.write_text(result.stdout + "\n" + result.stderr)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"official evaluation failed so check {logFilePath}")
-
-    # the last number on each row of its printed table is the all column
-    officialScores = {}
-    for line in result.stdout.splitlines():
-        if line.startswith("execution"):
-            officialScores["ex"] = float(line.split()[-1])
-        elif line.startswith("exact match"):
-            officialScores["em"] = float(line.split()[-1])
+    officialScores = {
+        "em": readMetricRow(standardOutput, "exact match"),
+        "ex": readMetricRow(standardOutput, "execution"),
+        "ex_gold_values": readMetricRow(goldValuesOutput, "execution"),
+    }
 
     ourScores = summarizeScores(rows)["all"]
 
-    for metric in ["em", "ex"]:
+    for metric in accuracyMetrics:
         gap = abs(officialScores[metric] - ourScores[metric])
         assert gap < tolerance, (
             f"{metric} disagrees with official {officialScores[metric]:.3f} vs ours {ourScores[metric]:.3f}"
         )
 
+    officialScores["component_matching"] = readComponentMatching(standardOutput)
+
     print(
         f"cross check passed with official EM {officialScores['em']:.3f} and EX {officialScores['ex']:.3f} "
-        f"and the log is in {logFilePath}"
+        f"and EX with gold values {officialScores['ex_gold_values']:.3f}"
     )
 
     return officialScores
 
 
-def printDiagnostics(rows: list):
+def printComponentF1(componentMatching: dict):
+    # the paper reports f1 per component so thats the one worth eyeballing
+    print("component matching f1 over all examples")
+    for componentName, scoresByLevel in componentMatching["f1"].items():
+        print(f"  {componentName:18}{scoresByLevel['all']:>8.3f}")
+
+
+def countDiagnostics(rows: list) -> dict:
     # breaks parser failures down so the em vs ex gap can be explained in the report
     validRows = []
     for row in rows:
@@ -323,14 +422,25 @@ def printDiagnostics(rows: list):
     for row in parseFailButRuns:
         parseFailButRunsCorrect = parseFailButRunsCorrect + row["ex"]
 
-    parseFailAndCrashes = len(parseFailRows) - len(parseFailButRuns)
+    return {
+        "n_examples": len(rows),
+        "invalid_outputs": len(rows) - len(validRows),
+        "execution_errors": execErrorCount,
+        "em_parse_failures": len(parseFailRows),
+        "em_parse_failures_that_run": len(parseFailButRuns),
+        "em_parse_failures_that_run_and_are_ex_correct": parseFailButRunsCorrect,
+        "em_parse_failures_that_crash": len(parseFailRows) - len(parseFailButRuns),
+    }
 
-    print(f"invalid outputs with no sql extracted {len(rows) - len(validRows)}")
-    print(f"execution errors among valid outputs {execErrorCount}")
+
+def printDiagnostics(diagnostics: dict):
+    print(f"invalid outputs with no sql extracted {diagnostics['invalid_outputs']}")
+    print(f"execution errors among valid outputs {diagnostics['execution_errors']}")
     print(
-        f"em parser failures on valid outputs {len(parseFailRows)} "
-        f"with {len(parseFailButRuns)} running fine and {parseFailButRunsCorrect} of those ex correct "
-        f"and {parseFailAndCrashes} crashing"
+        f"em parser failures on valid outputs {diagnostics['em_parse_failures']} "
+        f"with {diagnostics['em_parse_failures_that_run']} running fine and "
+        f"{diagnostics['em_parse_failures_that_run_and_are_ex_correct']} of those ex correct "
+        f"and {diagnostics['em_parse_failures_that_crash']} crashing"
     )
 
 
@@ -351,13 +461,27 @@ def main():
     scoredPath = runPath.with_name(runPath.stem + "_scored.jsonl")
     writeJsonl(rows, scoredPath)
 
-    printSummary(summarizeScores(rows), title = f"{args.run}  ({len(rows)} examples)")
-    printDiagnostics(rows)
+    scoreSummary = summarizeScores(rows)
+    diagnostics = countDiagnostics(rows)
+
+    printSummary(scoreSummary, title = f"{args.run}  ({len(rows)} examples)")
+    printDiagnostics(diagnostics)
 
     runTag = scoredPath.stem.replace("_scored", "")
-    crossCheckWithOfficial(rows, runTag)
+    officialScores = crossCheckWithOfficial(rows, runTag)
+    printComponentF1(officialScores["component_matching"])
 
-    print(f"per example scores written to {scoredPath}")
+    # one file per run with every number the report needs so summarizing never has to rescore
+    runSummary = {
+        "run": runTag,
+        "scores_by_difficulty": scoreSummary,
+        "component_matching": officialScores["component_matching"],
+        "diagnostics": diagnostics,
+    }
+    summaryPath = runPath.with_name(runPath.stem + "_summary.json")
+    summaryPath.write_text(json.dumps(runSummary, indent = 2))
+
+    print(f"per example scores written to {scoredPath} and the summary to {summaryPath}")
 
 
 if __name__ == "__main__":

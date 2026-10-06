@@ -1,7 +1,7 @@
 """
 checks to run before trusting any model results
   1  sql extraction handles the reply formats we expect
-  2  scoring the gold queries against themselves gives 100 percent em and ex from our scorer and the official one
+  2  scoring the gold queries against themselves gives 100 percent on em and ex and ex with gold values from our scorer and the official one
   3  replies with nothing extracted get scored wrong the same way by both
 if any of these fail the pipeline is broken and model numbers would mean nothing
 rerun it any time spiderUtils.py or scoring.py changes
@@ -89,7 +89,7 @@ def checkGoldAgainstGold(subsetRows: list):
 
     wrongIds = []
     for row in rows:
-        if row["em"] != 1 or row["ex"] != 1:
+        if row["em"] != 1 or row["ex"] != 1 or row["ex_gold_values"] != 1:
             wrongIds.append(row["dev_idx"])
 
     assert len(wrongIds) == 0, f"gold scored wrong on dev_idx {wrongIds}"
@@ -119,10 +119,11 @@ def checkInvalidOutputs(subsetRows: list):
     # tiny tolerance just for floating point
     assert abs(overall["em"] - expectedScore) < 1e-9
     assert abs(overall["ex"] - expectedScore) < 1e-9
+    assert abs(overall["ex_gold_values"] - expectedScore) < 1e-9
 
     crossCheckWithOfficial(rows, "sanity_invalid")
 
-    print(f"invalid output handling with {nBlanked} blanked gave EM and EX of {expectedScore:.3f} as expected")
+    print(f"invalid output handling with {nBlanked} blanked gave EM and EX and EX with gold values of {expectedScore:.3f} as expected")
 
 
 def main():
