@@ -56,24 +56,26 @@ preferredRunOrder = [
 ]
 
 # the comparisons the report actually makes
-# each one is a question with the two runs it compares and gets skipped if either run isnt scored yet
+# each one is a research question family then a question then the two runs it compares
+# it gets skipped if either run isnt scored yet
+# holm correction runs inside each family so rq1 and rq3 dont inflate each others p values
 plannedComparisons = [
-    ("size within coder 1.5b vs 7b", "full-qwen25coder-1.5b", "full-qwen25coder-7b"),
-    ("size within coder 0.5b vs 1.5b", "full-qwen25coder-0.5b", "full-qwen25coder-1.5b"),
-    ("size within coder 1.5b vs 3b", "full-qwen25coder-1.5b", "full-qwen25coder-3b"),
-    ("size within coder 3b vs 7b", "full-qwen25coder-3b", "full-qwen25coder-7b"),
-    ("thinking on vs off qwen3 1.7b", "full-qwen3-1.7b-nothink", "full-qwen3-1.7b-think"),
-    ("thinking on vs off qwen3 4b", "full-qwen3-4b-nothink", "full-qwen3-4b-think"),
-    ("thinking on vs off qwen3 8b", "full-qwen3-8b-nothink", "full-qwen3-8b-think"),
-    ("reasoning 4b vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think"),
-    ("quantization 7b bf16 vs awq", "full-qwen25coder-7b", "full-qwen25coder-7b-awq"),
-    ("qwen3 size no thinking 1.7b vs 4b", "full-qwen3-1.7b-nothink", "full-qwen3-4b-nothink"),
-    ("qwen3 size no thinking 4b vs 8b", "full-qwen3-4b-nothink", "full-qwen3-8b-nothink"),
-    ("qwen3 size thinking 1.7b vs 4b", "full-qwen3-1.7b-think", "full-qwen3-4b-think"),
-    ("qwen3 size thinking 4b vs 8b", "full-qwen3-4b-think", "full-qwen3-8b-think"),
-    ("self consistency 4b N3 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc3"),
-    ("self consistency 4b N5 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc5"),
-    ("self consistency 4b N5 vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think-sc5"),
+    ("rq1", "size within coder 1.5b vs 7b", "full-qwen25coder-1.5b", "full-qwen25coder-7b"),
+    ("rq1", "size within coder 0.5b vs 1.5b", "full-qwen25coder-0.5b", "full-qwen25coder-1.5b"),
+    ("rq1", "size within coder 1.5b vs 3b", "full-qwen25coder-1.5b", "full-qwen25coder-3b"),
+    ("rq1", "size within coder 3b vs 7b", "full-qwen25coder-3b", "full-qwen25coder-7b"),
+    ("rq1", "thinking on vs off qwen3 1.7b", "full-qwen3-1.7b-nothink", "full-qwen3-1.7b-think"),
+    ("rq1", "thinking on vs off qwen3 4b", "full-qwen3-4b-nothink", "full-qwen3-4b-think"),
+    ("rq1", "thinking on vs off qwen3 8b", "full-qwen3-8b-nothink", "full-qwen3-8b-think"),
+    ("rq1", "reasoning 4b vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think"),
+    ("rq1", "quantization 7b bf16 vs awq", "full-qwen25coder-7b", "full-qwen25coder-7b-awq"),
+    ("rq1", "qwen3 size no thinking 1.7b vs 4b", "full-qwen3-1.7b-nothink", "full-qwen3-4b-nothink"),
+    ("rq1", "qwen3 size no thinking 4b vs 8b", "full-qwen3-4b-nothink", "full-qwen3-8b-nothink"),
+    ("rq1", "qwen3 size thinking 1.7b vs 4b", "full-qwen3-1.7b-think", "full-qwen3-4b-think"),
+    ("rq1", "qwen3 size thinking 4b vs 8b", "full-qwen3-4b-think", "full-qwen3-8b-think"),
+    ("rq3", "self consistency 4b N3 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc3"),
+    ("rq3", "self consistency 4b N5 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc5"),
+    ("rq3", "self consistency 4b N5 vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think-sc5"),
 ]
 
 
@@ -366,7 +368,7 @@ def buildEfficiencyTable(runs: list) -> list:
 def buildMcNemarTable(runsByName: dict) -> list:
     tableRows = []
 
-    for question, firstName, secondName in plannedComparisons:
+    for family, question, firstName, secondName in plannedComparisons:
         if firstName not in runsByName or secondName not in runsByName:
             continue
 
@@ -394,6 +396,7 @@ def buildMcNemarTable(runsByName: dict) -> list:
                     onlySecondRight = onlySecondRight + 1
 
             tableRows.append({
+                "family": family,
                 "question": question,
                 "metric": metric,
                 "first": firstRun["label"],
@@ -407,20 +410,26 @@ def buildMcNemarTable(runsByName: dict) -> list:
                 "p_value": exactMcNemar(onlyFirstRight, onlySecondRight),
             })
 
-    # holm runs separately for ex and em since those are two families of tests
-    for metric in ["ex", "em"]:
-        metricRows = []
-        for tableRow in tableRows:
-            if tableRow["metric"] == metric:
-                metricRows.append(tableRow)
+    # holm runs separately for every research question and metric pair since each one is its own family of tests
+    familyNames = []
+    for tableRow in tableRows:
+        if tableRow["family"] not in familyNames:
+            familyNames.append(tableRow["family"])
 
-        pValues = []
-        for tableRow in metricRows:
-            pValues.append(tableRow["p_value"])
+    for family in familyNames:
+        for metric in ["ex", "em"]:
+            familyRows = []
+            for tableRow in tableRows:
+                if tableRow["family"] == family and tableRow["metric"] == metric:
+                    familyRows.append(tableRow)
 
-        adjusted = holmAdjust(pValues)
-        for tableRow, adjustedP in zip(metricRows, adjusted):
-            tableRow["p_holm"] = adjustedP
+            pValues = []
+            for tableRow in familyRows:
+                pValues.append(tableRow["p_value"])
+
+            adjusted = holmAdjust(pValues)
+            for tableRow, adjustedP in zip(familyRows, adjusted):
+                tableRow["p_holm"] = adjustedP
 
     return tableRows
 
@@ -621,7 +630,7 @@ def main():
 
     sections.append("\n## McNemar tests\n")
     sections.append(toMarkdown(mcnemarRows, [
-        "question", "metric", "first_acc", "second_acc", "difference",
+        "family", "question", "metric", "first_acc", "second_acc", "difference",
         "only_first_right", "only_second_right", "p_value", "p_holm",
     ]))
 
