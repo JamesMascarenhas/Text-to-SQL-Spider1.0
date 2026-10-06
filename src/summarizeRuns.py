@@ -63,6 +63,10 @@ plannedComparisons = [
     ("thinking on vs off qwen3 8b", "full-qwen3-8b-nothink", "full-qwen3-8b-think"),
     ("reasoning 4b vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think"),
     ("quantization 7b bf16 vs awq", "full-qwen25coder-7b", "full-qwen25coder-7b-awq"),
+    ("qwen3 size no thinking 1.7b vs 4b", "full-qwen3-1.7b-nothink", "full-qwen3-4b-nothink"),
+    ("qwen3 size no thinking 4b vs 8b", "full-qwen3-4b-nothink", "full-qwen3-8b-nothink"),
+    ("qwen3 size thinking 1.7b vs 4b", "full-qwen3-1.7b-think", "full-qwen3-4b-think"),
+    ("qwen3 size thinking 4b vs 8b", "full-qwen3-4b-think", "full-qwen3-8b-think"),
 ]
 
 
