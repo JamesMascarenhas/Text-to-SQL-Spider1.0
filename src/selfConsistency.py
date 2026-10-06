@@ -19,6 +19,14 @@ voting rules fixed before seeing any self consistency results
   sensitivity    the same vote with ties going to the earliest seed instead gets reported too
                  along with how many questions a tie actually decided
 
+a quirk of the official scorer worth knowing
+  ex strips every DISTINCT before running queries including the one inside COUNT(DISTINCT x)
+  the vote runs queries as written so two queries in the same group can still score differently on ex
+  that means picking which query to use inside a group can flip ex even though the answer didnt change
+  so the main table also counts fixes and breaks that came only from that choice
+  and a keep baseline row shows the vote when seed 42s query is kept whenever its in the winning group
+  under that rule ex only changes when the vote really switches to a different answer
+
 what it writes
   outputs/runs/<name>-sc<N>.jsonl plus a config so scoring.py can score it like any other run
   outputs/selfConsistency/ with the vote details and a selfConsistency.md holding
@@ -251,6 +259,15 @@ def voteOverSeeds(candidatesById: dict, seedSubset: list, tieBreak: str = "short
 
         voteResult = vote(subsetCandidates, tieBreak)
         chosen = subsetCandidates[voteResult["chosenPosition"]]
+        baseline = subsetCandidates[0]
+
+        # same rows as the baseline means the vote kept the baseline answer and only the query text differs
+        sameRowsAsBaseline = baseline["signature"] is not None and chosen["signature"] == baseline["signature"]
+
+        if sameRowsAsBaseline:
+            votedExKeepBaseline = baseline["ex"]
+        else:
+            votedExKeepBaseline = chosen["ex"]
 
         anyRight = 0
         for candidate in subsetCandidates:
@@ -266,6 +283,8 @@ def voteOverSeeds(candidatesById: dict, seedSubset: list, tieBreak: str = "short
             "nGroups": voteResult["nGroups"],
             "nValid": voteResult["nValid"],
             "decidedByTie": voteResult["decidedByTie"],
+            "sameRowsAsBaseline": sameRowsAsBaseline,
+            "votedExKeepBaseline": votedExKeepBaseline,
             "n": len(subsetCandidates),
         }
 
@@ -337,7 +356,8 @@ def writeVotedRun(baseName: str, candidatesById: dict, seedSubset: list, runsByS
 
 # analysis tables
 
-def mainTable(resultsById: dict) -> dict:
+def mainTable(resultsById: dict, exKey: str = "votedEx") -> dict:
+    # exKey picks which version of the vote gets summarized so the same table works for the keep baseline row
     results = list(resultsById.values())
     n = len(results)
 
@@ -346,14 +366,26 @@ def mainTable(resultsById: dict) -> dict:
     anyRight = 0
     fixedCount = 0
     brokenCount = 0
+    fixedByGroupChoice = 0
+    brokenByGroupChoice = 0
     for result in results:
         baselineRight = baselineRight + result["baselineEx"]
-        votedRight = votedRight + result["votedEx"]
+        votedRight = votedRight + result[exKey]
         anyRight = anyRight + result["anyRight"]
-        if result["baselineEx"] == 0 and result["votedEx"] == 1:
+
+        isFixed = result["baselineEx"] == 0 and result[exKey] == 1
+        isBroken = result["baselineEx"] == 1 and result[exKey] == 0
+
+        if isFixed:
             fixedCount = fixedCount + 1
-        if result["baselineEx"] == 1 and result["votedEx"] == 0:
+        if isBroken:
             brokenCount = brokenCount + 1
+
+        # the answer stayed the same and only the chosen query text changed the score
+        if isFixed and result["sameRowsAsBaseline"]:
+            fixedByGroupChoice = fixedByGroupChoice + 1
+        if isBroken and result["sameRowsAsBaseline"]:
+            brokenByGroupChoice = brokenByGroupChoice + 1
 
     votedLow, votedHigh = wilsonInterval(votedRight, n)
 
@@ -366,6 +398,8 @@ def mainTable(resultsById: dict) -> dict:
         "upper_bound_any_right": anyRight / n,
         "fixed": fixedCount,
         "broken": brokenCount,
+        "fixed_by_group_choice_only": fixedByGroupChoice,
+        "broken_by_group_choice_only": brokenByGroupChoice,
         "mcnemar_p": exactMcNemar(brokenCount, fixedCount),
     }
 
@@ -411,18 +445,22 @@ def scalingTable(candidatesById: dict, usedSeeds: list) -> pd.DataFrame:
 
     for subsetSize in range(1, len(usedSeeds) + 1):
         votedScores = []
+        keepBaselineScores = []
         upperBounds = []
 
         for seedSubset in itertools.combinations(usedSeeds, subsetSize):
             resultsById = voteOverSeeds(candidatesById, list(seedSubset))
 
             votedTotal = 0
+            keepBaselineTotal = 0
             anyTotal = 0
             for result in resultsById.values():
                 votedTotal = votedTotal + result["votedEx"]
+                keepBaselineTotal = keepBaselineTotal + result["votedExKeepBaseline"]
                 anyTotal = anyTotal + result["anyRight"]
 
             votedScores.append(votedTotal / len(resultsById))
+            keepBaselineScores.append(keepBaselineTotal / len(resultsById))
             upperBounds.append(anyTotal / len(resultsById))
 
         tableRows.append({
@@ -431,6 +469,7 @@ def scalingTable(candidatesById: dict, usedSeeds: list) -> pd.DataFrame:
             "voted_ex_mean": statistics.mean(votedScores),
             "voted_ex_min": min(votedScores),
             "voted_ex_max": max(votedScores),
+            "keep_baseline_ex_mean": statistics.mean(keepBaselineScores),
             "upper_bound_mean": statistics.mean(upperBounds),
         })
 
@@ -479,7 +518,11 @@ def agreementTable(resultsById: dict) -> tuple:
             elif wrongValue == rightValue:
                 pairWins = pairWins + 0.5
 
-    agreementAuroc = pairWins / (len(wrongVotes) * len(rightVotes))
+    # undefined if every answer is right or every answer is wrong
+    if len(wrongVotes) == 0 or len(rightVotes) == 0:
+        agreementAuroc = float("nan")
+    else:
+        agreementAuroc = pairWins / (len(wrongVotes) * len(rightVotes))
 
     return pd.DataFrame(tableRows), agreementAuroc
 
@@ -627,6 +670,9 @@ def main():
     # the same vote with the seed order tie break as a sensitivity check
     seedOrderResults = voteOverSeeds(candidatesById, usedSeeds, tieBreak = "seedOrder")
     seedOrderResult = mainTable(seedOrderResults)
+
+    # the same vote but seed 42s query is kept whenever its in the winning group which removes the scorer quirk
+    keepBaselineResult = mainTable(resultsById, exKey = "votedExKeepBaseline")
     byDifficulty = difficultyTable(resultsById, candidatesById)
     scaling = scalingTable(candidatesById, usedSeeds)
     agreement, agreementAuroc = agreementTable(resultsById)
@@ -655,6 +701,9 @@ def main():
     sections.append(f"\nquestions decided by a tie {tieCount} of {len(resultsById)}\n")
     sections.append("\n## Sensitivity with ties going to the earliest seed instead\n")
     sections.append(toMarkdown(pd.DataFrame([seedOrderResult])))
+    sections.append("\n## Sensitivity keeping the baseline query whenever its in the winning group\n")
+    sections.append("ex only changes here when the vote switches to a different answer so the scorers DISTINCT quirk cant flip it\n\n")
+    sections.append(toMarkdown(pd.DataFrame([keepBaselineResult])))
     sections.append("\n## By difficulty\n")
     sections.append(toMarkdown(byDifficulty))
     sections.append("\n## Scaling averaged over every subset of seeds\n")
@@ -674,6 +723,10 @@ def main():
     print(
         f"voted ex {mainResult['voted_ex']:.3f} vs baseline {mainResult['baseline_ex']:.3f} "
         f"with upper bound {mainResult['upper_bound_any_right']:.3f}"
+    )
+    print(
+        f"keeping the baseline query inside its group gives {keepBaselineResult['voted_ex']:.3f} "
+        f"and {mainResult['fixed_by_group_choice_only']} fixes plus {mainResult['broken_by_group_choice_only']} breaks came only from the group choice"
     )
     for votedName in writtenNames:
         print(f"wrote outputs/runs/{votedName}.jsonl so score it next")
