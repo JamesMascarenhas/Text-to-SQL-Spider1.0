@@ -72,7 +72,14 @@ def findScoredRuns() -> list:
     # a run counts as scored once its summary file exists since scoring.py writes that last
     runNames = []
     for summaryPath in runsDir.glob("full-*_summary.json"):
-        runNames.append(summaryPath.name.replace("_summary.json", ""))
+        runName = summaryPath.name.replace("_summary.json", "")
+
+        # no config means the run was copied over before colab finished it so its numbers dont count yet
+        if not (runsDir / f"{runName}_config.json").exists():
+            print(f"skipping {runName} since it has no config file so it probably wasnt finished when it was copied")
+            continue
+
+        runNames.append(runName)
 
     orderedNames = []
     for runName in preferredRunOrder:

@@ -603,6 +603,14 @@ def main():
     args = parser.parse_args()
 
     runPath = Path(args.run)
+
+    # colab only writes the config once a run is done so no config means its still going or was cut off
+    # scoring a half finished run gives numbers that cant be compared with anything
+    configPath = runPath.with_name(runPath.stem + "_config.json")
+    if not configPath.exists():
+        print(f"skipping {runPath.name} since it has no config file yet so it probably hasnt finished on colab")
+        sys.exit(1)
+
     rows = readJsonl(runPath)
 
     # scores get added onto each row so one file holds the output and how it did
