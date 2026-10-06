@@ -52,13 +52,18 @@ runsDir = outDir / "runs"
 analysisDir = outDir / "traceAnalysis"
 
 defaultPrimary = "full-qwen3-4b-think"
+# every thinking run that could exist and anything not scored yet just gets skipped
 defaultReplications = [
     "full-qwen3-4b-think-seed66",
     "full-qwen3-4b-think-seed73",
+    "full-qwen3-4b-think-seed137",
+    "full-qwen3-4b-think-seed255",
     "full-qwen3-1.7b-think",
     "full-qwen3-1.7b-think-seed66",
     "full-qwen3-1.7b-think-seed73",
     "full-qwen3-8b-think",
+    "full-qwen3-8b-think-seed66",
+    "full-qwen3-8b-think-seed73",
 ]
 
 # the features that get the full set of tests and the labels used in tables and plots
