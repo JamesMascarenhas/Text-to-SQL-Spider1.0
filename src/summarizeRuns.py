@@ -47,6 +47,10 @@ preferredRunOrder = [
     "full-qwen3-4b-think",
     "full-qwen3-4b-think-seed66",
     "full-qwen3-4b-think-seed73",
+    "full-qwen3-4b-think-seed137",
+    "full-qwen3-4b-think-seed255",
+    "full-qwen3-4b-think-sc3",
+    "full-qwen3-4b-think-sc5",
     "full-qwen3-8b-nothink",
     "full-qwen3-8b-think",
 ]
@@ -67,6 +71,9 @@ plannedComparisons = [
     ("qwen3 size no thinking 4b vs 8b", "full-qwen3-4b-nothink", "full-qwen3-8b-nothink"),
     ("qwen3 size thinking 1.7b vs 4b", "full-qwen3-1.7b-think", "full-qwen3-4b-think"),
     ("qwen3 size thinking 4b vs 8b", "full-qwen3-4b-think", "full-qwen3-8b-think"),
+    ("self consistency 4b N3 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc3"),
+    ("self consistency 4b N5 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc5"),
+    ("self consistency 4b N5 vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think-sc5"),
 ]
 
 
@@ -128,6 +135,11 @@ def buildLabel(runConfig: dict) -> str:
         label = label + " think"
     elif runConfig["thinking"] == "off":
         label = label + " no think"
+
+    # voted runs get named by their strategy instead of a seed
+    if "strategy" in runConfig:
+        label = label + f" self consistency N={runConfig['strategy']['n_samples']}"
+        return label
 
     seed = runConfig["decoding"]["seed"]
     if runConfig["thinking"] == "on" and seed != 42:
@@ -417,6 +429,10 @@ def buildSeedTable(runs: list) -> list:
     # groups runs that are the same model and thinking mode and only differ by seed
     groups = {}
     for run in runs:
+        # voted runs combine several seeds so they arent another sample of the same thing
+        if "strategy" in run["config"]:
+            continue
+
         groupKey = (run["config"]["model"], run["config"]["thinking"])
         if groupKey not in groups:
             groups[groupKey] = []
