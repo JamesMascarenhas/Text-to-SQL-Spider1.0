@@ -339,8 +339,10 @@ def summarizeForReplication(runName: str, features: pd.DataFrame) -> dict:
     }
 
     # does each content feature add anything beyond length here too
+    # the sign matters as much as the p value since positive means more of it goes with being right at the same length
     for featureName in ["branchPer1k", "sqlDrafts", "waitPer1k"]:
         fitted = fitClusteredLogit(features, f"correct ~ C(difficulty) + logLength + {featureName}")
+        summaryRow[f"{featureName}_coef_beyond_length"] = fitted.params[featureName]
         summaryRow[f"{featureName}_p_beyond_length"] = fitted.pvalues[featureName]
 
     return summaryRow
