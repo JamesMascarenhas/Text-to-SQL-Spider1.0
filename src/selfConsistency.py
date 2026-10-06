@@ -31,6 +31,7 @@ what it writes
   outputs/runs/<name>-sc<N>.jsonl plus a config so scoring.py can score it like any other run
   outputs/selfConsistency/ with the vote details and a selfConsistency.md holding
     main result     baseline vs voted vs the upper bound where at least one candidate is right
+                    with the gain and a 95 percent interval from resampling gold queries
     by difficulty   the same split by difficulty
     scaling         voted accuracy for every subset size averaged over every subset of seeds
     agreement       accuracy by how many candidates agreed which is the confidence signal
@@ -57,7 +58,7 @@ import pandas as pd
 from scoring import decodeIgnoringBadBytes, predTimeLimitSeconds
 from exec_eval import postprocess, replace_cur_year  # noqa: E402
 from spiderUtils import difficultyLevels, getDbPath, outDir, readJsonl, writeJsonl  # noqa: E402
-from summarizeRuns import exactMcNemar, wilsonInterval  # noqa: E402
+from summarizeRuns import exactMcNemar, goldGroupKey, pairedGainInterval, wilsonInterval  # noqa: E402
 
 
 runsDir = outDir / "runs"
@@ -356,10 +357,20 @@ def writeVotedRun(baseName: str, candidatesById: dict, seedSubset: list, runsByS
 
 # analysis tables
 
-def mainTable(resultsById: dict, exKey: str = "votedEx") -> dict:
-    # exKey picks which version of the vote gets summarized so the same table works for the keep baseline row
+def mainTable(resultsById: dict, groupKeyById: dict, exKey: str = "votedEx") -> dict:
+    # exKey picks which version of the vote gets summarized so the same table works for the sensitivity rows
     results = list(resultsById.values())
     n = len(results)
+
+    # the gain over the baseline with an interval that keeps paraphrase pairs together
+    groupKeys = []
+    baselineValues = []
+    votedValues = []
+    for devIdx, result in resultsById.items():
+        groupKeys.append(groupKeyById[devIdx])
+        baselineValues.append(result["baselineEx"])
+        votedValues.append(result[exKey])
+    gainLow, gainHigh = pairedGainInterval(groupKeys, baselineValues, votedValues)
 
     baselineRight = 0
     votedRight = 0
@@ -395,6 +406,9 @@ def mainTable(resultsById: dict, exKey: str = "votedEx") -> dict:
         "voted_ex": votedRight / n,
         "voted_ci_low": votedLow,
         "voted_ci_high": votedHigh,
+        "gain": (votedRight - baselineRight) / n,
+        "gain_ci_low": gainLow,
+        "gain_ci_high": gainHigh,
         "upper_bound_any_right": anyRight / n,
         "fixed": fixedCount,
         "broken": brokenCount,
@@ -659,7 +673,12 @@ def main():
         detailRows.append(detailRow)
     pd.DataFrame(detailRows).to_csv(consistencyDir / f"votes_n{len(usedSeeds)}.csv", index = False)
 
-    mainResult = mainTable(resultsById)
+    # paraphrase groups for the gain intervals
+    groupKeyById = {}
+    for devIdx, candidates in candidatesById.items():
+        groupKeyById[devIdx] = goldGroupKey(candidates[0]["row"])
+
+    mainResult = mainTable(resultsById, groupKeyById)
 
     # how many questions a tie actually decided which bounds how much the tie rule can matter
     tieCount = 0
@@ -669,10 +688,10 @@ def main():
 
     # the same vote with the seed order tie break as a sensitivity check
     seedOrderResults = voteOverSeeds(candidatesById, usedSeeds, tieBreak = "seedOrder")
-    seedOrderResult = mainTable(seedOrderResults)
+    seedOrderResult = mainTable(seedOrderResults, groupKeyById)
 
     # the same vote but seed 42s query is kept whenever its in the winning group which removes the scorer quirk
-    keepBaselineResult = mainTable(resultsById, exKey = "votedExKeepBaseline")
+    keepBaselineResult = mainTable(resultsById, groupKeyById, exKey = "votedExKeepBaseline")
     byDifficulty = difficultyTable(resultsById, candidatesById)
     scaling = scalingTable(candidatesById, usedSeeds)
     agreement, agreementAuroc = agreementTable(resultsById)
@@ -722,7 +741,9 @@ def main():
 
     print(
         f"voted ex {mainResult['voted_ex']:.3f} vs baseline {mainResult['baseline_ex']:.3f} "
-        f"with upper bound {mainResult['upper_bound_any_right']:.3f}"
+        f"so a gain of {mainResult['gain']:+.3f} with 95 percent interval "
+        f"{mainResult['gain_ci_low']:+.3f} to {mainResult['gain_ci_high']:+.3f} "
+        f"and upper bound {mainResult['upper_bound_any_right']:.3f}"
     )
     print(
         f"keeping the baseline query inside its group gives {keepBaselineResult['voted_ex']:.3f} "

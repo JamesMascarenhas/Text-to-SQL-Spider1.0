@@ -11,6 +11,7 @@ tables it makes
   components      the papers component matching f1 over all examples
   efficiency      time and tokens per example plus truncation checks
   mcnemar         paired significance tests for the comparisons the report makes with holm correction
+                  plus a 95 percent interval on each accuracy difference from resampling gold queries
   seeds           mean and spread across seeds wherever there are repeat runs
   settings        the run settings straight from each config for the methodology
 
@@ -23,10 +24,11 @@ how to run
 import csv
 import json
 import math
+import random
 import statistics
 from pathlib import Path
 
-from spiderUtils import difficultyLevels, outDir, readJsonl
+from spiderUtils import difficultyLevels, outDir, randomSeed, readJsonl
 
 
 runsDir = outDir / "runs"
@@ -73,9 +75,11 @@ plannedComparisons = [
     ("rq1", "qwen3 size no thinking 4b vs 8b", "full-qwen3-4b-nothink", "full-qwen3-8b-nothink"),
     ("rq1", "qwen3 size thinking 1.7b vs 4b", "full-qwen3-1.7b-think", "full-qwen3-4b-think"),
     ("rq1", "qwen3 size thinking 4b vs 8b", "full-qwen3-4b-think", "full-qwen3-8b-think"),
-    ("rq3", "self consistency 4b N3 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc3"),
-    ("rq3", "self consistency 4b N5 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc5"),
-    ("rq3", "self consistency 4b N5 vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think-sc5"),
+    # rq3 has one primary test fixed before the N=5 results existed
+    # so it sits alone and the other two are corrected together as secondary
+    ("rq3 primary", "self consistency 4b N5 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc5"),
+    ("rq3 secondary", "self consistency 4b N3 vs single", "full-qwen3-4b-think", "full-qwen3-4b-think-sc3"),
+    ("rq3 secondary", "self consistency 4b N5 vs coder 7b", "full-qwen25coder-7b", "full-qwen3-4b-think-sc5"),
 ]
 
 
@@ -189,6 +193,55 @@ def exactMcNemar(onlyFirstRight: int, onlySecondRight: int) -> float:
         tailProbability = tailProbability + math.comb(nDisagree, k) * 0.5 ** nDisagree
 
     return min(1.0, 2 * tailProbability)
+
+
+def goldGroupKey(row: dict) -> str:
+    # paraphrase pairs share a gold query so this key keeps them together when resampling
+    return row["db_id"] + " " + " ".join(row["gold"].lower().split())
+
+
+def pairedGainInterval(groupKeys: list, firstValues: list, secondValues: list,
+                       nResamples: int = 2000, confidence: float = 0.95) -> tuple:
+    """
+    interval for how much the second run beats the first on average per question
+    resamples whole gold query groups with replacement so paraphrase pairs move together
+    which keeps the interval from looking tighter than the data really supports
+    fixed seed so the interval comes out the same on every run
+    """
+    # each group only needs its total difference and its size
+    groupDifference = {}
+    groupSize = {}
+    for groupKey, firstValue, secondValue in zip(groupKeys, firstValues, secondValues):
+        if groupKey not in groupDifference:
+            groupDifference[groupKey] = 0
+            groupSize[groupKey] = 0
+        groupDifference[groupKey] = groupDifference[groupKey] + (secondValue - firstValue)
+        groupSize[groupKey] = groupSize[groupKey] + 1
+
+    differenceList = list(groupDifference.values())
+    sizeList = list(groupSize.values())
+    nGroups = len(differenceList)
+
+    randomGenerator = random.Random(randomSeed)
+    resampledGains = []
+
+    for _ in range(nResamples):
+        picks = randomGenerator.choices(range(nGroups), k = nGroups)
+
+        totalDifference = 0
+        totalQuestions = 0
+        for pick in picks:
+            totalDifference = totalDifference + differenceList[pick]
+            totalQuestions = totalQuestions + sizeList[pick]
+
+        resampledGains.append(totalDifference / totalQuestions)
+
+    resampledGains.sort()
+
+    lowIndex = int((1 - confidence) / 2 * nResamples)
+    highIndex = int((1 + confidence) / 2 * nResamples) - 1
+
+    return resampledGains[lowIndex], resampledGains[highIndex]
 
 
 def holmAdjust(pValues: list) -> list:
@@ -383,6 +436,9 @@ def buildMcNemarTable(runsByName: dict) -> list:
             onlySecondRight = 0
             firstTotal = 0
             secondTotal = 0
+            groupKeys = []
+            firstValues = []
+            secondValues = []
 
             for devIdx in sharedIds:
                 firstRight = firstRun["rowsById"][devIdx][metric]
@@ -390,10 +446,16 @@ def buildMcNemarTable(runsByName: dict) -> list:
                 firstTotal = firstTotal + firstRight
                 secondTotal = secondTotal + secondRight
 
+                groupKeys.append(goldGroupKey(firstRun["rowsById"][devIdx]))
+                firstValues.append(firstRight)
+                secondValues.append(secondRight)
+
                 if firstRight == 1 and secondRight == 0:
                     onlyFirstRight = onlyFirstRight + 1
                 elif firstRight == 0 and secondRight == 1:
                     onlySecondRight = onlySecondRight + 1
+
+            intervalLow, intervalHigh = pairedGainInterval(groupKeys, firstValues, secondValues)
 
             tableRows.append({
                 "family": family,
@@ -405,6 +467,8 @@ def buildMcNemarTable(runsByName: dict) -> list:
                 "first_acc": firstTotal / len(sharedIds),
                 "second_acc": secondTotal / len(sharedIds),
                 "difference": (secondTotal - firstTotal) / len(sharedIds),
+                "difference_ci_low": intervalLow,
+                "difference_ci_high": intervalHigh,
                 "only_first_right": onlyFirstRight,
                 "only_second_right": onlySecondRight,
                 "p_value": exactMcNemar(onlyFirstRight, onlySecondRight),
@@ -630,7 +694,7 @@ def main():
 
     sections.append("\n## McNemar tests\n")
     sections.append(toMarkdown(mcnemarRows, [
-        "family", "question", "metric", "first_acc", "second_acc", "difference",
+        "family", "question", "metric", "first_acc", "second_acc", "difference", "difference_ci_low", "difference_ci_high",
         "only_first_right", "only_second_right", "p_value", "p_holm",
     ]))
 
