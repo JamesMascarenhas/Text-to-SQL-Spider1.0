@@ -8,8 +8,15 @@ figures
                   the em panel next to the ex panel shows how flat em stays while ex climbs
   cost tradeoff   ex against mean output tokens per question for every configuration
                   including the 4 bit model and self consistency once those exist
+  by difficulty   ex at each spider difficulty for the coder sizes with the 4 bit model
+                  and for every qwen3 size with thinking off and on
+  thinking return what thinking adds at each size and difficulty with a 95 percent interval
+                  and how many ex points each thousand extra tokens buys
+  compute ladder  task 3 view of qwen3 4b by difficulty going from no thinking to thinking to voting
+                  with the best of 5 upper bound marked over each group
 
 writes png files into outputs/figures
+needs selfConsistency.py to have run first for the compute ladder
 
 how to run
     python src/plotResults.py
@@ -25,11 +32,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from spiderUtils import outDir  # noqa: E402
+from spiderUtils import difficultyLevels, outDir  # noqa: E402
 
 
 summaryDir = outDir / "summary"
 figuresDir = outDir / "figures"
+selfConsistencyDir = outDir / "selfConsistency"
+
+difficultyNames = {"easy": "easy", "medium": "medium", "hard": "hard", "extra": "extra hard", "all": "all"}
 
 # total parameters in billions
 # check every one against its hugging face model card and cite the cards in the report
@@ -152,6 +162,10 @@ def groupSeeds(runTable: pd.DataFrame) -> pd.DataFrame:
             "emMax": groupTable["em_all"].max(),
             "tokensMean": groupTable["output_tokens_mean"].mean(),
         })
+
+        # by difficulty means for the difficulty figure with seeds averaged the same way
+        for level in difficultyLevels:
+            groupRows[-1][f"ex_{level}Mean"] = groupTable[f"ex_{level}"].mean()
 
     return pd.DataFrame(groupRows)
 
@@ -322,6 +336,213 @@ def plotCostTradeoff(groups: pd.DataFrame):
     plt.close(figure)
 
 
+def drawGroupedBars(axis, groupLabels: list, barSpecs: list, barWidth: float):
+    """
+    one cluster of bars per group label with the bars side by side inside each cluster
+    each bar spec is a legend label then a colour then one value per group label
+    """
+    nBars = len(barSpecs)
+
+    for barPosition, (barLabel, barColour, barValues) in enumerate(barSpecs):
+        # centres the cluster on the group tick
+        offset = (barPosition - (nBars - 1) / 2) * barWidth
+
+        xPositions = []
+        for groupPosition in range(len(groupLabels)):
+            xPositions.append(groupPosition + offset)
+
+        axis.bar(xPositions, barValues, width = barWidth, color = barColour, label = barLabel)
+
+    axis.set_xticks(range(len(groupLabels)))
+    axis.set_xticklabels(groupLabels)
+
+
+def findGroup(groups: pd.DataFrame, modelName: str, thinking: str):
+    # plain run groups only so the 4 bit twin and voted runs never get picked by accident
+    matches = groups[
+        (groups["modelName"] == modelName)
+        & (groups["thinking"] == thinking)
+        & (groups["isVoted"] == False)  # noqa: E712
+    ]
+    return matches.iloc[0]
+
+
+def difficultyValues(groupRow) -> list:
+    values = []
+    for level in difficultyLevels:
+        values.append(groupRow[f"ex_{level}Mean"])
+    return values
+
+
+def plotByDifficulty(groups: pd.DataFrame):
+    groupLabels = []
+    for level in difficultyLevels:
+        groupLabels.append(difficultyNames[level])
+
+    # darker shade means a bigger model so size reads the same way in both panels
+    coderSpecs = [
+        ("0.5B", "#B7CDE8", "Qwen2.5-Coder-0.5B-Instruct"),
+        ("1.5B", "#86A9D6", "Qwen2.5-Coder-1.5B-Instruct"),
+        ("3B", "#4C72B0", "Qwen2.5-Coder-3B-Instruct"),
+        ("7B", "#24406E", "Qwen2.5-Coder-7B-Instruct"),
+        ("7B AWQ", "#B8860B", "Qwen2.5-Coder-7B-Instruct-AWQ"),
+    ]
+    coderBars = []
+    for barLabel, barColour, modelName in coderSpecs:
+        coderBars.append((barLabel, barColour, difficultyValues(findGroup(groups, modelName, "none"))))
+
+    # each size gets its off and on bars next to each other so the thinking jump is easy to read
+    qwenSpecs = [
+        ("1.7B no thinking", "#F2C2A0", "Qwen3-1.7B", "off"),
+        ("1.7B thinking", "#A8D5B2", "Qwen3-1.7B", "on"),
+        ("4B no thinking", "#E59866", "Qwen3-4B", "off"),
+        ("4B thinking", "#55A868", "Qwen3-4B", "on"),
+        ("8B no thinking", "#C0612B", "Qwen3-8B", "off"),
+        ("8B thinking", "#2E6B3C", "Qwen3-8B", "on"),
+    ]
+    qwenBars = []
+    for barLabel, barColour, modelName, thinking in qwenSpecs:
+        qwenBars.append((barLabel, barColour, difficultyValues(findGroup(groups, modelName, thinking))))
+
+    figure, axes = plt.subplots(1, 2, figsize = (11, 4.6), sharey = True)
+
+    drawGroupedBars(axes[0], groupLabels, coderBars, barWidth = 0.16)
+    axes[0].set_title("Qwen2.5-Coder by size with the 4 bit model", fontsize = 10)
+
+    drawGroupedBars(axes[1], groupLabels, qwenBars, barWidth = 0.13)
+    axes[1].set_title("Qwen3 by size with thinking off and on", fontsize = 10)
+
+    for axis, nColumns in [(axes[0], 5), (axes[1], 3)]:
+        axis.set_ylim(0, 1)
+        axis.set_xlabel("Spider difficulty")
+        axis.grid(axis = "y", alpha = 0.3)
+        axis.set_axisbelow(True)
+        # legend under the bars since the easy bars reach almost to the top
+        axis.legend(fontsize = 8, ncol = nColumns, loc = "upper center", bbox_to_anchor = (0.5, -0.17), frameon = False)
+
+    axes[0].set_ylabel("execution accuracy (EX)")
+    figure.suptitle("Execution accuracy by difficulty", fontsize = 11)
+    figure.tight_layout()
+    figure.savefig(figuresDir / "accuracy_by_difficulty.png", dpi = 200)
+    plt.close(figure)
+
+
+def plotThinkingReturn():
+    thinkingTable = pd.read_csv(summaryDir / "thinking.csv")
+
+    levels = difficultyLevels + ["all"]
+    groupLabels = []
+    for level in levels:
+        groupLabels.append(difficultyNames[level])
+
+    sizeColours = [("Qwen3-1.7B", "1.7B", "#A8D5B2"), ("Qwen3-4B", "4B", "#55A868"), ("Qwen3-8B", "8B", "#2E6B3C")]
+    barWidth = 0.24
+
+    figure, axes = plt.subplots(1, 2, figsize = (11, 4.2))
+
+    panels = [
+        (axes[0], "gain", "gain_ci_low", "gain_ci_high", 100, "EX gain from thinking (points)", "What thinking adds"),
+        (axes[1], "points_per_1k_tokens", "points_per_1k_ci_low", "points_per_1k_ci_high", 1,
+         "EX points per 1,000 extra output tokens", "What each extra token buys"),
+    ]
+
+    for axis, valueColumn, lowColumn, highColumn, scale, yLabel, title in panels:
+        for barPosition, (modelName, sizeLabel, barColour) in enumerate(sizeColours):
+            offset = (barPosition - 1) * barWidth
+
+            xPositions = []
+            values = []
+            lowerBars = []
+            upperBars = []
+            for groupPosition, level in enumerate(levels):
+                tableRow = thinkingTable[(thinkingTable["model"] == modelName) & (thinkingTable["difficulty"] == level)].iloc[0]
+                value = tableRow[valueColumn] * scale
+                xPositions.append(groupPosition + offset)
+                values.append(value)
+                lowerBars.append(value - tableRow[lowColumn] * scale)
+                upperBars.append(tableRow[highColumn] * scale - value)
+
+            axis.bar(xPositions, values, width = barWidth, color = barColour, label = sizeLabel,
+                     yerr = [lowerBars, upperBars], capsize = 2, error_kw = {"elinewidth": 0.8})
+
+        # a thin line at zero so intervals that cross it stand out
+        axis.axhline(0, color = "black", linewidth = 0.8)
+        axis.set_xticks(range(len(levels)))
+        axis.set_xticklabels(groupLabels)
+        axis.set_xlabel("Spider difficulty")
+        axis.set_ylabel(yLabel)
+        axis.set_title(title, fontsize = 10)
+        axis.grid(axis = "y", alpha = 0.3)
+        axis.set_axisbelow(True)
+
+    axes[0].legend(fontsize = 8, title = "Qwen3 size", title_fontsize = 8)
+    figure.suptitle("Return on thinking by difficulty (95 percent intervals)", fontsize = 11)
+    figure.tight_layout()
+    figure.savefig(figuresDir / "thinking_return.png", dpi = 200)
+    plt.close(figure)
+
+
+def plotComputeLadder(runTable: pd.DataFrame):
+    levels = difficultyLevels + ["all"]
+    groupLabels = []
+    for level in levels:
+        groupLabels.append(difficultyNames[level])
+
+    fourB = runTable[runTable["modelName"] == "Qwen3-4B"]
+
+    # the single thinking run is seed 42 since thats the baseline the task 3 test was fixed against
+    ladderRows = [
+        ("no thinking", "#E59866", fourB[fourB["thinking"] == "off"].iloc[0]),
+        ("thinking, one sample (seed 42)", "#55A868",
+         fourB[(fourB["thinking"] == "on") & (fourB["isVoted"] == False) & (fourB["seed"] == 42)].iloc[0]),  # noqa: E712
+        ("thinking, vote over 3", "#B3A9D6", fourB[fourB["run"].str.contains("N=3")].iloc[0]),
+        ("thinking, vote over 5", "#8172B3", fourB[fourB["run"].str.contains("N=5")].iloc[0]),
+    ]
+
+    barSpecs = []
+    for barLabel, barColour, tableRow in ladderRows:
+        values = []
+        for level in levels:
+            values.append(tableRow[f"ex_{level}"])
+        barSpecs.append((barLabel, barColour, values))
+
+    figure, axis = plt.subplots(figsize = (8, 4.6))
+    barWidth = 0.19
+    drawGroupedBars(axis, groupLabels, barSpecs, barWidth = barWidth)
+
+    # best of 5 is the share of questions where at least one of the 5 samples was right
+    # no vote can beat it so it shows how much room voting had
+    byDifficulty = pd.read_csv(selfConsistencyDir / "by_difficulty.csv")
+    for groupPosition, level in enumerate(levels):
+        upperBound = byDifficulty[byDifficulty["difficulty"] == level].iloc[0]["upper_bound_any_right"]
+        clusterHalfWidth = 2 * barWidth
+        if groupPosition == 0:
+            boundLabel = "best of 5 (upper bound)"
+        else:
+            boundLabel = None
+        axis.hlines(upperBound, groupPosition - clusterHalfWidth, groupPosition + clusterHalfWidth,
+                    colors = "black", linestyles = "dashed", linewidth = 1, label = boundLabel)
+
+    axis.set_ylim(0, 1)
+    axis.set_xlabel("Spider difficulty")
+    axis.set_ylabel("execution accuracy (EX)")
+    axis.set_title("Qwen3-4B as test time compute is added", fontsize = 11)
+    axis.grid(axis = "y", alpha = 0.3)
+    axis.set_axisbelow(True)
+
+    # matplotlib lists the dashed bound first so it gets moved behind the bars to follow the ladder order
+    handles, labels = axis.get_legend_handles_labels()
+    boundPosition = labels.index("best of 5 (upper bound)")
+    boundHandle = handles.pop(boundPosition)
+    boundLabel = labels.pop(boundPosition)
+    handles.append(boundHandle)
+    labels.append(boundLabel)
+    axis.legend(handles, labels, fontsize = 8, ncol = 3, loc = "upper center", bbox_to_anchor = (0.5, -0.14), frameon = False)
+    figure.tight_layout()
+    figure.savefig(figuresDir / "compute_ladder.png", dpi = 200)
+    plt.close(figure)
+
+
 def main():
     figuresDir.mkdir(parents = True, exist_ok = True)
 
@@ -330,11 +551,14 @@ def main():
 
     plotSizeCurves(groups)
     plotCostTradeoff(groups)
+    plotByDifficulty(groups)
+    plotThinkingReturn()
+    plotComputeLadder(runTable)
 
     # the numbers behind both figures so the report text can quote them exactly
     groups.to_csv(figuresDir / "figure_points.csv", index = False)
 
-    print(f"wrote size_curves.png and cost_tradeoff.png and figure_points.csv into {figuresDir}")
+    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png and figure_points.csv into {figuresDir}")
 
 
 if __name__ == "__main__":
