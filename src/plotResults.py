@@ -226,7 +226,20 @@ def plotSizeCurves(groups: pd.DataFrame):
     plt.close(figure)
 
 
-def plotCostTradeoff(groups: pd.DataFrame):
+contextGrey = "#C4C4C4"
+
+
+def plotCostTradeoff(groups: pd.DataFrame, fileName: str, includeVoted: bool, focusKeys):
+    """
+    ex against mean output tokens for every configuration
+    task 1 leaves the voted runs out since self consistency only gets introduced in task 3
+    task 3 adds them back and passes focusKeys so only the points its comparisons use keep their colour
+    and everything else turns grey as context
+    focusKeys is None or a set of legend series and point label pairs
+    """
+    if not includeVoted:
+        groups = groups[groups["isVoted"] == False]  # noqa: E712
+
     figure, axis = plt.subplots(figsize = (7, 5))
 
     # a model and its 4 bit twin land almost on top of each other so their labels go above and below
@@ -277,9 +290,17 @@ def plotCostTradeoff(groups: pd.DataFrame):
     for _, groupRow in groups.iterrows():
         style = pointStyle(groupRow)
 
+        pointKey = (legendSeriesFor(groupRow), shortLabel(groupRow))
+        if focusKeys is None or pointKey in focusKeys:
+            pointColour = style["colour"]
+            textColour = "black"
+        else:
+            pointColour = contextGrey
+            textColour = "#9A9A9A"
+
         axis.scatter(
             groupRow["tokensMean"], groupRow["exMean"],
-            marker = style["marker"], s = 60, color = style["colour"],
+            marker = style["marker"], s = 60, color = pointColour,
         )
         if groupRow["modelName"] in twinOffsets and not groupRow["isVoted"]:
             labelOffset = twinOffsets[groupRow["modelName"]]
@@ -296,7 +317,8 @@ def plotCostTradeoff(groups: pd.DataFrame):
             alignment = "left"
 
         axis.annotate(shortLabel(groupRow), (groupRow["tokensMean"], groupRow["exMean"]),
-                      textcoords = "offset points", xytext = labelOffset, fontsize = 7, ha = alignment)
+                      textcoords = "offset points", xytext = labelOffset, fontsize = 7, ha = alignment,
+                      color = textColour)
 
     # legend entries drawn once per series
     # each variant sits right under its base model in the legend
@@ -307,8 +329,20 @@ def plotCostTradeoff(groups: pd.DataFrame):
         ("Qwen3 thinking", seriesStyles["Qwen3 thinking"]),
         ("Qwen3-4B thinking self consistency", variantStyles["Qwen3-4B thinking self consistency"]),
     ]
+    focusSeries = set()
+    if focusKeys is not None:
+        for seriesLabel, _ in focusKeys:
+            focusSeries.add(seriesLabel)
+
     for legendLabel, style in legendOrder:
+        if legendLabel == "Qwen3-4B thinking self consistency" and not includeVoted:
+            continue
+        if focusKeys is not None and legendLabel not in focusSeries:
+            continue
         axis.scatter([], [], marker = style["marker"], color = style["colour"], label = legendLabel)
+
+    if focusKeys is not None:
+        axis.scatter([], [], marker = "o", color = contextGrey, label = "other Task 1 configurations")
 
     axis.set_xscale("log")
 
@@ -333,7 +367,7 @@ def plotCostTradeoff(groups: pd.DataFrame):
     axis.grid(alpha = 0.3)
     axis.legend(fontsize = 8, loc = "lower right")
     figure.tight_layout()
-    figure.savefig(figuresDir / "cost_tradeoff.png", dpi = 200)
+    figure.savefig(figuresDir / fileName, dpi = 200)
     plt.close(figure)
 
 
@@ -554,60 +588,43 @@ def legendSeriesFor(groupRow) -> str:
 
 def plotEmAgainstExSquare(groups: pd.DataFrame):
     """
-    same points as the em against ex figure but with both axes on one shared range
-    so how far a point sits above the diagonal reads directly as the gap between the metrics
-    the top right cluster gets a zoomed inset since those points sit on top of each other at this scale
+    overall em against overall ex for every task 1 configuration on one shared range for both axes
+    so a step right means the same as a step up and the gap between the metrics reads straight off the plot
+    voted runs stay out since self consistency only gets introduced in task 3
     """
-    figure, axis = plt.subplots(figsize = (7, 7.8))
+    plainGroups = groups[groups["isVoted"] == False]  # noqa: E712
+
+    figure, axis = plt.subplots(figsize = (7, 7))
 
     axisLow = 0.15
     axisHigh = 0.85
 
-    # the crowded corner that the inset blows up
-    zoomEmLow = 0.44
-    # wide enough on the right that the labels beside the 7b points stay inside the inset
-    zoomEmHigh = 0.516
-    zoomExLow = 0.783
-    zoomExHigh = 0.816
-
-    # labels inside the inset in offset points keyed by legend series then point label
-    insetNudges = {
-        ("Qwen3 thinking", "8B"): (0, -13, "center"),
+    # the 7b pair and the two bigger thinking runs sit close together so their labels go to set sides
+    # keyed by legend series then point label
+    labelNudges = {
+        ("Qwen2.5-Coder 4 bit AWQ", "7B AWQ"): (6, 3, "left"),
+        ("Qwen2.5-Coder", "7B"): (6, -10, "left"),
+        ("Qwen3 thinking", "8B"): (-7, 3, "right"),
         ("Qwen3 thinking", "4B"): (0, -13, "center"),
-        ("Qwen3-4B thinking self consistency", "SC N=3"): (-7, 3, "right"),
-        ("Qwen3-4B thinking self consistency", "SC N=5"): (0, -13, "center"),
-        ("Qwen2.5-Coder 4 bit AWQ", "7B AWQ"): (7, 3, "left"),
-        ("Qwen2.5-Coder", "7B"): (7, -8, "left"),
     }
 
-    # sits under the diagonal where there are no points at all
-    insetAxis = axis.inset_axes([0.56, 0.06, 0.40, 0.34])
-
-    for _, groupRow in groups.iterrows():
+    for _, groupRow in plainGroups.iterrows():
         style = pointStyle(groupRow)
         pointPosition = (groupRow["emMean"], groupRow["exMean"])
         pointLabel = shortLabel(groupRow)
         labelKey = (legendSeriesFor(groupRow), pointLabel)
 
-        axis.scatter(pointPosition[0], pointPosition[1], marker = style["marker"], s = 50, color = style["colour"])
+        axis.scatter(pointPosition[0], pointPosition[1], marker = style["marker"], s = 55, color = style["colour"])
 
-        inZoom = zoomEmLow <= pointPosition[0] <= zoomEmHigh and zoomExLow <= pointPosition[1] <= zoomExHigh
-
-        if inZoom:
-            insetAxis.scatter(pointPosition[0], pointPosition[1], marker = style["marker"], s = 60, color = style["colour"])
-            offsetX, offsetY, alignment = insetNudges.get(labelKey, (6, 3, "left"))
-            insetAxis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = (offsetX, offsetY),
-                               fontsize = 7, ha = alignment)
-        else:
-            # labels in the main view only for points outside the zoomed corner
-            axis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = (6, 3), fontsize = 7)
+        offsetX, offsetY, alignment = labelNudges.get(labelKey, (6, 3, "left"))
+        axis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = (offsetX, offsetY),
+                      fontsize = 7, ha = alignment)
 
     for legendLabel, style in [
         ("Qwen2.5-Coder", seriesStyles["Qwen2.5-Coder"]),
         ("Qwen2.5-Coder 4 bit AWQ", variantStyles["Qwen2.5-Coder 4 bit AWQ"]),
         ("Qwen3 no thinking", seriesStyles["Qwen3 no thinking"]),
         ("Qwen3 thinking", seriesStyles["Qwen3 thinking"]),
-        ("Qwen3-4B thinking self consistency", variantStyles["Qwen3-4B thinking self consistency"]),
     ]:
         axis.scatter([], [], marker = style["marker"], color = style["colour"], label = legendLabel)
 
@@ -619,14 +636,8 @@ def plotEmAgainstExSquare(groups: pd.DataFrame):
     axis.set_ylabel("execution accuracy (EX)")
     axis.set_title("Exact set match against execution accuracy", fontsize = 11)
     axis.grid(alpha = 0.3)
-
-    insetAxis.set_xlim(zoomEmLow, zoomEmHigh)
-    insetAxis.set_ylim(zoomExLow, zoomExHigh)
-    insetAxis.tick_params(labelsize = 6)
-    insetAxis.grid(alpha = 0.3)
-    axis.indicate_inset_zoom(insetAxis, edgecolor = "grey")
-
-    axis.legend(fontsize = 8, ncol = 3, loc = "upper center", bbox_to_anchor = (0.5, -0.09), frameon = False)
+    # the bottom right is empty since no configuration scores high em with low ex
+    axis.legend(fontsize = 8, loc = "lower right")
     figure.tight_layout()
     figure.savefig(figuresDir / "em_against_ex_square.png", dpi = 200)
     plt.close(figure)
@@ -639,7 +650,16 @@ def main():
     groups = groupSeeds(runTable)
 
     plotSizeCurves(groups)
-    plotCostTradeoff(groups)
+    plotCostTradeoff(groups, "cost_tradeoff.png", includeVoted = False, focusKeys = None)
+
+    # the task 3 version keeps everything as grey context and colours only the points its tests compare
+    votingFocus = {
+        ("Qwen3 thinking", "4B"),
+        ("Qwen3-4B thinking self consistency", "SC N=3"),
+        ("Qwen3-4B thinking self consistency", "SC N=5"),
+        ("Qwen2.5-Coder", "7B"),
+    }
+    plotCostTradeoff(groups, "cost_tradeoff_voting.png", includeVoted = True, focusKeys = votingFocus)
     plotByDifficulty(groups)
     plotThinkingReturn()
     plotComputeLadder(runTable)
@@ -648,7 +668,7 @@ def main():
     # the numbers behind both figures so the report text can quote them exactly
     groups.to_csv(figuresDir / "figure_points.csv", index = False)
 
-    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png em_against_ex_square.png and figure_points.csv into {figuresDir}")
+    print(f"wrote size_curves.png cost_tradeoff.png cost_tradeoff_voting.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png em_against_ex_square.png and figure_points.csv into {figuresDir}")
 
 
 if __name__ == "__main__":
