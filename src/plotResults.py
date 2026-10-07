@@ -50,6 +50,21 @@ seriesStyles = {
     "Qwen3 thinking": {"colour": "#55A868", "marker": "^"},
 }
 
+# variants keep their base models shape so the model type still reads
+# but get their own colour so 4 bit and voting dont blur together
+variantStyles = {
+    "Qwen2.5-Coder 4 bit AWQ": {"colour": "#B8860B", "marker": "o"},
+    "Qwen3-4B thinking self consistency": {"colour": "#8172B3", "marker": "^"},
+}
+
+
+def pointStyle(tableRow) -> dict:
+    if tableRow["isQuantized"]:
+        return variantStyles["Qwen2.5-Coder 4 bit AWQ"]
+    if tableRow["isVoted"]:
+        return variantStyles["Qwen3-4B thinking self consistency"]
+    return seriesStyles[seriesName(tableRow)]
+
 
 # loading
 
@@ -239,17 +254,11 @@ def plotCostTradeoff(groups: pd.DataFrame):
         placedPoints.append((xPosition, yPosition))
 
     for _, groupRow in groups.iterrows():
-        style = seriesStyles[seriesName(groupRow)]
-
-        # voted and 4 bit runs get hollow markers so they read as variants of a base model
-        if groupRow["isVoted"] or groupRow["isQuantized"]:
-            faceColour = "none"
-        else:
-            faceColour = style["colour"]
+        style = pointStyle(groupRow)
 
         axis.scatter(
             groupRow["tokensMean"], groupRow["exMean"],
-            marker = style["marker"], s = 60, edgecolors = style["colour"], facecolors = faceColour,
+            marker = style["marker"], s = 60, color = style["colour"],
         )
         if groupRow["modelName"] in twinOffsets and not groupRow["isVoted"]:
             labelOffset = twinOffsets[groupRow["modelName"]]
@@ -264,7 +273,8 @@ def plotCostTradeoff(groups: pd.DataFrame):
     # legend entries drawn once per series
     for series, style in seriesStyles.items():
         axis.scatter([], [], marker = style["marker"], color = style["colour"], label = series)
-    axis.scatter([], [], marker = "o", facecolors = "none", edgecolors = "grey", label = "4 bit or self consistency")
+    for variant, style in variantStyles.items():
+        axis.scatter([], [], marker = style["marker"], color = style["colour"], label = variant)
 
     axis.set_xscale("log")
 
