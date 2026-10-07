@@ -12,6 +12,7 @@ figures
                   and for every qwen3 size with thinking off and on
   thinking return what thinking adds at each size and difficulty with a 95 percent interval
                   and how many ex points each thousand extra tokens buys
+  em against ex   overall em against overall ex for every configuration to show the two metrics rank models differently
   compute ladder  task 3 view of qwen3 4b by difficulty going from no thinking to thinking to voting
                   with the best of 5 upper bound marked over each group
 
@@ -543,6 +544,85 @@ def plotComputeLadder(runTable: pd.DataFrame):
     plt.close(figure)
 
 
+def plotEmAgainstEx(groups: pd.DataFrame):
+    figure, axis = plt.subplots(figsize = (7.5, 5.8))
+
+    # four points nearly sit on top of each other in the top right so their labels move out
+    # into empty space with a thin line back to the point
+    # keyed by legend series then point label and given in data coordinates
+    calloutPlacements = {
+        ("Qwen3-4B thinking self consistency", "SC N=3"): (0.47, 0.840, "right"),
+        ("Qwen3-4B thinking self consistency", "SC N=5"): (0.50, 0.840, "left"),
+        ("Qwen2.5-Coder 4 bit AWQ", "7B AWQ"): (0.515, 0.818, "left"),
+        ("Qwen2.5-Coder", "7B"): (0.515, 0.790, "left"),
+    }
+
+    # the two thinking points next to that cluster just get nudged to their left
+    labelNudges = {
+        ("Qwen3 thinking", "4B"): (-6, -11),
+        ("Qwen3 thinking", "8B"): (-6, 4),
+    }
+
+    for _, groupRow in groups.iterrows():
+        style = pointStyle(groupRow)
+        axis.scatter(groupRow["emMean"], groupRow["exMean"], marker = style["marker"], s = 60, color = style["colour"])
+
+        if groupRow["isQuantized"]:
+            legendSeries = "Qwen2.5-Coder 4 bit AWQ"
+        elif groupRow["isVoted"]:
+            legendSeries = "Qwen3-4B thinking self consistency"
+        else:
+            legendSeries = seriesName(groupRow)
+
+        pointLabel = shortLabel(groupRow)
+        labelKey = (legendSeries, pointLabel)
+        pointPosition = (groupRow["emMean"], groupRow["exMean"])
+
+        if labelKey in calloutPlacements:
+            textX, textY, alignment = calloutPlacements[labelKey]
+            axis.annotate(pointLabel, pointPosition, textcoords = "data", xytext = (textX, textY),
+                          fontsize = 7, ha = alignment, va = "center",
+                          arrowprops = {"arrowstyle": "-", "color": "grey", "linewidth": 0.6})
+            continue
+
+        if labelKey in labelNudges:
+            labelOffset = labelNudges[labelKey]
+            alignment = "right"
+        else:
+            labelOffset = (6, 3)
+            alignment = "left"
+
+        axis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = labelOffset,
+                      fontsize = 7, ha = alignment)
+
+    legendOrder = [
+        ("Qwen2.5-Coder", seriesStyles["Qwen2.5-Coder"]),
+        ("Qwen2.5-Coder 4 bit AWQ", variantStyles["Qwen2.5-Coder 4 bit AWQ"]),
+        ("Qwen3 no thinking", seriesStyles["Qwen3 no thinking"]),
+        ("Qwen3 thinking", seriesStyles["Qwen3 thinking"]),
+        ("Qwen3-4B thinking self consistency", variantStyles["Qwen3-4B thinking self consistency"]),
+    ]
+    for legendLabel, style in legendOrder:
+        axis.scatter([], [], marker = style["marker"], color = style["colour"], label = legendLabel)
+
+    # em ignores values while ex checks them so a run could in theory land below this line
+    # but every one sits well above it and the height above it is the gap between the two metrics
+    # drawn after the markers so it lands last in the legend
+    axis.plot([0, 1], [0, 1], color = "grey", linestyle = "dotted", linewidth = 1, label = "EX = EM")
+
+    axis.set_xlim(0.15, 0.55)
+    axis.set_ylim(0.40, 0.85)
+    axis.set_xlabel("exact set match (EM)")
+    axis.set_ylabel("execution accuracy (EX)")
+    axis.set_title("Exact set match against execution accuracy", fontsize = 11)
+    axis.grid(alpha = 0.3)
+    # under the plot since every corner inside it already holds points or the EX = EM line
+    axis.legend(fontsize = 8, ncol = 3, loc = "upper center", bbox_to_anchor = (0.5, -0.12), frameon = False)
+    figure.tight_layout()
+    figure.savefig(figuresDir / "em_against_ex.png", dpi = 200)
+    plt.close(figure)
+
+
 def main():
     figuresDir.mkdir(parents = True, exist_ok = True)
 
@@ -554,11 +634,12 @@ def main():
     plotByDifficulty(groups)
     plotThinkingReturn()
     plotComputeLadder(runTable)
+    plotEmAgainstEx(groups)
 
     # the numbers behind both figures so the report text can quote them exactly
     groups.to_csv(figuresDir / "figure_points.csv", index = False)
 
-    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png and figure_points.csv into {figuresDir}")
+    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png em_against_ex.png and figure_points.csv into {figuresDir}")
 
 
 if __name__ == "__main__":
