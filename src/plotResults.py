@@ -104,17 +104,14 @@ def seriesName(tableRow) -> str:
 
 
 def shortLabel(tableRow) -> str:
-    # compact point labels for the cost figure
-    label = tableRow["modelName"].replace("Qwen2.5-Coder-", "Coder ").replace("-Instruct", "")
-    label = label.replace("-AWQ", " AWQ").replace("Qwen3-", "Qwen3 ")
-
-    if tableRow["thinking"] == "on":
-        label = label + " think"
-
+    # colour and shape already say which family and mode a point is so the label only needs the size
+    # the voted runs share one size so they get their sample count instead
     if tableRow["isVoted"]:
         votedPart = tableRow["run"].split("self consistency")[-1].strip()
-        label = label + " SC " + votedPart
+        return "SC " + votedPart
 
+    label = tableRow["modelName"].replace("Qwen2.5-Coder-", "").replace("-Instruct", "")
+    label = label.replace("-AWQ", " AWQ").replace("Qwen3-", "")
     return label
 
 
@@ -208,7 +205,7 @@ def plotSizeCurves(groups: pd.DataFrame):
 
     axes[0].set_ylabel("accuracy on Spider dev")
     axes[0].legend(fontsize = 8)
-    figure.suptitle("Accuracy by model size (thinking points are seed means with min to max bars)", fontsize = 11)
+    figure.suptitle("Accuracy by model size", fontsize = 11)
     figure.tight_layout()
     figure.savefig(figuresDir / "size_curves.png", dpi = 200)
     plt.close(figure)
@@ -244,14 +241,23 @@ def plotCostTradeoff(groups: pd.DataFrame):
         yPosition = groupRow["exMean"]
 
         neighbourCount = 0
-        for placedX, placedY in placedPoints:
+        for placedX, placedY, _ in placedPoints:
             if abs(placedX - xPosition) < 0.25 and abs(placedY - yPosition) < 0.02:
                 neighbourCount = neighbourCount + 1
 
         if neighbourCount % 2 == 1:
             crowdedOffsets[groupRow["run"]] = (5, -12)
 
-        placedPoints.append((xPosition, yPosition))
+        placedPoints.append((xPosition, yPosition, groupRow["run"]))
+
+    # the left point of a crowded pair puts its label on its left so it doesnt run into its neighbour
+    leftLabelled = set()
+    for placedX, placedY, placedRun in placedPoints:
+        if placedRun in crowdedOffsets:
+            continue
+        for otherX, otherY, otherRun in placedPoints:
+            if otherX > placedX and otherX - placedX < 0.25 and abs(otherY - placedY) < 0.02:
+                leftLabelled.add(placedRun)
 
     for _, groupRow in groups.iterrows():
         style = pointStyle(groupRow)
@@ -264,17 +270,30 @@ def plotCostTradeoff(groups: pd.DataFrame):
             labelOffset = twinOffsets[groupRow["modelName"]]
         elif groupRow["run"] in crowdedOffsets:
             labelOffset = crowdedOffsets[groupRow["run"]]
+        elif groupRow["run"] in leftLabelled:
+            labelOffset = (-5, 4)
         else:
             labelOffset = (5, 4)
 
+        if labelOffset[0] < 0:
+            alignment = "right"
+        else:
+            alignment = "left"
+
         axis.annotate(shortLabel(groupRow), (groupRow["tokensMean"], groupRow["exMean"]),
-                      textcoords = "offset points", xytext = labelOffset, fontsize = 7)
+                      textcoords = "offset points", xytext = labelOffset, fontsize = 7, ha = alignment)
 
     # legend entries drawn once per series
-    for series, style in seriesStyles.items():
-        axis.scatter([], [], marker = style["marker"], color = style["colour"], label = series)
-    for variant, style in variantStyles.items():
-        axis.scatter([], [], marker = style["marker"], color = style["colour"], label = variant)
+    # each variant sits right under its base model in the legend
+    legendOrder = [
+        ("Qwen2.5-Coder", seriesStyles["Qwen2.5-Coder"]),
+        ("Qwen2.5-Coder 4 bit AWQ", variantStyles["Qwen2.5-Coder 4 bit AWQ"]),
+        ("Qwen3 no thinking", seriesStyles["Qwen3 no thinking"]),
+        ("Qwen3 thinking", seriesStyles["Qwen3 thinking"]),
+        ("Qwen3-4B thinking self consistency", variantStyles["Qwen3-4B thinking self consistency"]),
+    ]
+    for legendLabel, style in legendOrder:
+        axis.scatter([], [], marker = style["marker"], color = style["colour"], label = legendLabel)
 
     axis.set_xscale("log")
 
