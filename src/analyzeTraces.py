@@ -409,6 +409,22 @@ def plotAccuracyByLength(features: pd.DataFrame, runName: str):
         axis.plot(quartileMedians, quartileAccuracies, marker = "o", label = level)
 
     axis.set_xscale("log")
+
+    # plain tick numbers read better than powers of ten and dont overlap
+    # only the ticks inside the plotted range so the axis doesnt stretch past the points
+    lowestLength, highestLength = axis.get_xlim()
+    candidateTicks = [100, 200, 300, 500, 1000, 2000, 3000, 5000]
+    lengthTicks = []
+    for tick in candidateTicks:
+        if lowestLength <= tick <= highestLength:
+            lengthTicks.append(tick)
+    axis.set_xticks(lengthTicks)
+    lengthTickLabels = []
+    for tick in lengthTicks:
+        lengthTickLabels.append(f"{tick:g}")
+    axis.set_xticklabels(lengthTickLabels)
+    axis.minorticks_off()
+
     axis.set_xlabel("median reasoning tokens in the length quartile (log scale)")
     axis.set_ylabel("execution accuracy")
     axis.set_title(f"Accuracy by trace length within each difficulty ({runName})", fontsize = 10)

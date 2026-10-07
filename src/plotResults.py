@@ -15,6 +15,8 @@ how to run
     python src/plotResults.py
 """
 
+import math
+
 import matplotlib
 
 # draws straight to files so it works without a screen
@@ -218,6 +220,24 @@ def plotCostTradeoff(groups: pd.DataFrame):
             twinOffsets[groupRow["modelName"]] = (5, -12)
             twinOffsets[baseName] = (5, 6)
 
+    # points that sit close together take turns putting their label above and below
+    # so pairs like 4b and 8b thinking or the two self consistency runs dont print on top of each other
+    crowdedOffsets = {}
+    placedPoints = []
+    for _, groupRow in groups.sort_values("tokensMean").iterrows():
+        xPosition = math.log10(groupRow["tokensMean"])
+        yPosition = groupRow["exMean"]
+
+        neighbourCount = 0
+        for placedX, placedY in placedPoints:
+            if abs(placedX - xPosition) < 0.25 and abs(placedY - yPosition) < 0.02:
+                neighbourCount = neighbourCount + 1
+
+        if neighbourCount % 2 == 1:
+            crowdedOffsets[groupRow["run"]] = (5, -12)
+
+        placedPoints.append((xPosition, yPosition))
+
     for _, groupRow in groups.iterrows():
         style = seriesStyles[seriesName(groupRow)]
 
@@ -233,6 +253,8 @@ def plotCostTradeoff(groups: pd.DataFrame):
         )
         if groupRow["modelName"] in twinOffsets and not groupRow["isVoted"]:
             labelOffset = twinOffsets[groupRow["modelName"]]
+        elif groupRow["run"] in crowdedOffsets:
+            labelOffset = crowdedOffsets[groupRow["run"]]
         else:
             labelOffset = (5, 4)
 
