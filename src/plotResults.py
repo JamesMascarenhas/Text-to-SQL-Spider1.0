@@ -544,82 +544,91 @@ def plotComputeLadder(runTable: pd.DataFrame):
     plt.close(figure)
 
 
-def plotEmAgainstEx(groups: pd.DataFrame):
-    figure, axis = plt.subplots(figsize = (7.5, 5.8))
+def legendSeriesFor(groupRow) -> str:
+    if groupRow["isQuantized"]:
+        return "Qwen2.5-Coder 4 bit AWQ"
+    if groupRow["isVoted"]:
+        return "Qwen3-4B thinking self consistency"
+    return seriesName(groupRow)
 
-    # four points nearly sit on top of each other in the top right so their labels move out
-    # into empty space with a thin line back to the point
-    # keyed by legend series then point label and given in data coordinates
-    calloutPlacements = {
-        ("Qwen3-4B thinking self consistency", "SC N=3"): (0.47, 0.840, "right"),
-        ("Qwen3-4B thinking self consistency", "SC N=5"): (0.50, 0.840, "left"),
-        ("Qwen2.5-Coder 4 bit AWQ", "7B AWQ"): (0.515, 0.818, "left"),
-        ("Qwen2.5-Coder", "7B"): (0.515, 0.790, "left"),
+
+def plotEmAgainstExSquare(groups: pd.DataFrame):
+    """
+    same points as the em against ex figure but with both axes on one shared range
+    so how far a point sits above the diagonal reads directly as the gap between the metrics
+    the top right cluster gets a zoomed inset since those points sit on top of each other at this scale
+    """
+    figure, axis = plt.subplots(figsize = (7, 7.8))
+
+    axisLow = 0.15
+    axisHigh = 0.85
+
+    # the crowded corner that the inset blows up
+    zoomEmLow = 0.44
+    # wide enough on the right that the labels beside the 7b points stay inside the inset
+    zoomEmHigh = 0.516
+    zoomExLow = 0.783
+    zoomExHigh = 0.816
+
+    # labels inside the inset in offset points keyed by legend series then point label
+    insetNudges = {
+        ("Qwen3 thinking", "8B"): (0, -13, "center"),
+        ("Qwen3 thinking", "4B"): (0, -13, "center"),
+        ("Qwen3-4B thinking self consistency", "SC N=3"): (-7, 3, "right"),
+        ("Qwen3-4B thinking self consistency", "SC N=5"): (0, -13, "center"),
+        ("Qwen2.5-Coder 4 bit AWQ", "7B AWQ"): (7, 3, "left"),
+        ("Qwen2.5-Coder", "7B"): (7, -8, "left"),
     }
 
-    # the two thinking points next to that cluster just get nudged to their left
-    labelNudges = {
-        ("Qwen3 thinking", "4B"): (-6, -11),
-        ("Qwen3 thinking", "8B"): (-6, 4),
-    }
+    # sits under the diagonal where there are no points at all
+    insetAxis = axis.inset_axes([0.56, 0.06, 0.40, 0.34])
 
     for _, groupRow in groups.iterrows():
         style = pointStyle(groupRow)
-        axis.scatter(groupRow["emMean"], groupRow["exMean"], marker = style["marker"], s = 60, color = style["colour"])
-
-        if groupRow["isQuantized"]:
-            legendSeries = "Qwen2.5-Coder 4 bit AWQ"
-        elif groupRow["isVoted"]:
-            legendSeries = "Qwen3-4B thinking self consistency"
-        else:
-            legendSeries = seriesName(groupRow)
-
-        pointLabel = shortLabel(groupRow)
-        labelKey = (legendSeries, pointLabel)
         pointPosition = (groupRow["emMean"], groupRow["exMean"])
+        pointLabel = shortLabel(groupRow)
+        labelKey = (legendSeriesFor(groupRow), pointLabel)
 
-        if labelKey in calloutPlacements:
-            textX, textY, alignment = calloutPlacements[labelKey]
-            axis.annotate(pointLabel, pointPosition, textcoords = "data", xytext = (textX, textY),
-                          fontsize = 7, ha = alignment, va = "center",
-                          arrowprops = {"arrowstyle": "-", "color": "grey", "linewidth": 0.6})
-            continue
+        axis.scatter(pointPosition[0], pointPosition[1], marker = style["marker"], s = 50, color = style["colour"])
 
-        if labelKey in labelNudges:
-            labelOffset = labelNudges[labelKey]
-            alignment = "right"
+        inZoom = zoomEmLow <= pointPosition[0] <= zoomEmHigh and zoomExLow <= pointPosition[1] <= zoomExHigh
+
+        if inZoom:
+            insetAxis.scatter(pointPosition[0], pointPosition[1], marker = style["marker"], s = 60, color = style["colour"])
+            offsetX, offsetY, alignment = insetNudges.get(labelKey, (6, 3, "left"))
+            insetAxis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = (offsetX, offsetY),
+                               fontsize = 7, ha = alignment)
         else:
-            labelOffset = (6, 3)
-            alignment = "left"
+            # labels in the main view only for points outside the zoomed corner
+            axis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = (6, 3), fontsize = 7)
 
-        axis.annotate(pointLabel, pointPosition, textcoords = "offset points", xytext = labelOffset,
-                      fontsize = 7, ha = alignment)
-
-    legendOrder = [
+    for legendLabel, style in [
         ("Qwen2.5-Coder", seriesStyles["Qwen2.5-Coder"]),
         ("Qwen2.5-Coder 4 bit AWQ", variantStyles["Qwen2.5-Coder 4 bit AWQ"]),
         ("Qwen3 no thinking", seriesStyles["Qwen3 no thinking"]),
         ("Qwen3 thinking", seriesStyles["Qwen3 thinking"]),
         ("Qwen3-4B thinking self consistency", variantStyles["Qwen3-4B thinking self consistency"]),
-    ]
-    for legendLabel, style in legendOrder:
+    ]:
         axis.scatter([], [], marker = style["marker"], color = style["colour"], label = legendLabel)
 
-    # em ignores values while ex checks them so a run could in theory land below this line
-    # but every one sits well above it and the height above it is the gap between the two metrics
-    # drawn after the markers so it lands last in the legend
-    axis.plot([0, 1], [0, 1], color = "grey", linestyle = "dotted", linewidth = 1, label = "EX = EM")
-
-    axis.set_xlim(0.15, 0.55)
-    axis.set_ylim(0.40, 0.85)
+    axis.set_xlim(axisLow, axisHigh)
+    axis.set_ylim(axisLow, axisHigh)
+    # equal scales so a step right means the same as a step up
+    axis.set_aspect("equal")
     axis.set_xlabel("exact set match (EM)")
     axis.set_ylabel("execution accuracy (EX)")
     axis.set_title("Exact set match against execution accuracy", fontsize = 11)
     axis.grid(alpha = 0.3)
-    # under the plot since every corner inside it already holds points or the EX = EM line
-    axis.legend(fontsize = 8, ncol = 3, loc = "upper center", bbox_to_anchor = (0.5, -0.12), frameon = False)
+
+    insetAxis.set_xlim(zoomEmLow, zoomEmHigh)
+    insetAxis.set_ylim(zoomExLow, zoomExHigh)
+    insetAxis.tick_params(labelsize = 6)
+    insetAxis.grid(alpha = 0.3)
+    axis.indicate_inset_zoom(insetAxis, edgecolor = "grey")
+
+    axis.legend(fontsize = 8, ncol = 3, loc = "upper center", bbox_to_anchor = (0.5, -0.09), frameon = False)
     figure.tight_layout()
-    figure.savefig(figuresDir / "em_against_ex.png", dpi = 200)
+    figure.savefig(figuresDir / "em_against_ex_square.png", dpi = 200)
     plt.close(figure)
 
 
@@ -634,12 +643,12 @@ def main():
     plotByDifficulty(groups)
     plotThinkingReturn()
     plotComputeLadder(runTable)
-    plotEmAgainstEx(groups)
+    plotEmAgainstExSquare(groups)
 
     # the numbers behind both figures so the report text can quote them exactly
     groups.to_csv(figuresDir / "figure_points.csv", index = False)
 
-    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png em_against_ex.png and figure_points.csv into {figuresDir}")
+    print(f"wrote size_curves.png cost_tradeoff.png accuracy_by_difficulty.png thinking_return.png compute_ladder.png em_against_ex_square.png and figure_points.csv into {figuresDir}")
 
 
 if __name__ == "__main__":
