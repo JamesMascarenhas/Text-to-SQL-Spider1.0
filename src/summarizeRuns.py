@@ -4,6 +4,7 @@ reads the scored files and summary files that scoring.py writes plus the config 
 only looks at runs whose names start with full- so pilots never sneak in
 works with whatever has been scored so far so it can be rerun as more runs finish
 runs on the mac and only needs the standard library
+the coincidence table runs each gold query once on its spider database
 
 tables it makes
   accuracy        em and ex and ex with gold values by difficulty plus a 95 percent interval on overall ex
@@ -14,6 +15,9 @@ tables it makes
                   plus a 95 percent interval on each accuracy difference from resampling gold queries
   seeds           mean and spread across seeds wherever there are repeat runs
   settings        the run settings straight from each config for the methodology
+  thinking        what turning thinking on buys at each qwen3 size and difficulty and what it costs in tokens
+  coincidence     an upper bound on ex passes that could be luck because the gold answer is empty or a lone 0 or null
+                  plus the planned comparisons rerun with every one of those counted as wrong
 
 writes csv files and a summary.md into outputs/summary
 
@@ -25,10 +29,11 @@ import csv
 import json
 import math
 import random
+import sqlite3
 import statistics
 from pathlib import Path
 
-from spiderUtils import difficultyLevels, outDir, randomSeed, readJsonl
+from spiderUtils import decodeIgnoringBadBytes, difficultyLevels, getDbPath, outDir, randomSeed, readJsonl
 
 
 runsDir = outDir / "runs"
@@ -55,7 +60,12 @@ preferredRunOrder = [
     "full-qwen3-4b-think-sc5",
     "full-qwen3-8b-nothink",
     "full-qwen3-8b-think",
+    "full-qwen3-8b-think-seed66",
+    "full-qwen3-8b-think-seed73",
 ]
+
+# the qwen3 sizes that ran with thinking both off and on
+thinkingModels = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-4B", "Qwen/Qwen3-8B"]
 
 # the comparisons the report actually makes
 # each one is a research question family then a question then the two runs it compares
@@ -418,7 +428,7 @@ def buildEfficiencyTable(runs: list) -> list:
     return tableRows
 
 
-def buildMcNemarTable(runsByName: dict) -> list:
+def buildMcNemarTable(runsByName: dict, metrics: list) -> list:
     tableRows = []
 
     for family, question, firstName, secondName in plannedComparisons:
@@ -431,7 +441,7 @@ def buildMcNemarTable(runsByName: dict) -> list:
         # only questions both runs answered since a resumed or partial run might be missing some
         sharedIds = sorted(set(firstRun["rowsById"]) & set(secondRun["rowsById"]))
 
-        for metric in ["ex", "em"]:
+        for metric in metrics:
             onlyFirstRight = 0
             onlySecondRight = 0
             firstTotal = 0
@@ -481,7 +491,7 @@ def buildMcNemarTable(runsByName: dict) -> list:
             familyNames.append(tableRow["family"])
 
     for family in familyNames:
-        for metric in ["ex", "em"]:
+        for metric in metrics:
             familyRows = []
             for tableRow in tableRows:
                 if tableRow["family"] == family and tableRow["metric"] == metric:
@@ -544,6 +554,162 @@ def buildSeedTable(runs: list) -> list:
             tableRow[f"{metric}_max"] = max(values)
 
         tableRows.append(tableRow)
+
+    return tableRows
+
+
+def buildThinkingTable(runs: list) -> list:
+    """
+    what turning thinking on buys at each qwen3 size and difficulty and what it costs
+    thinking samples so every seed of a size gets averaged per question first
+    no thinking is greedy so its one run already is the answer
+    the gain interval resamples gold query groups the same way the mcnemar table does
+    """
+    tableRows = []
+
+    for modelId in thinkingModels:
+        offRun = None
+        onRuns = []
+        for run in runs:
+            # voted runs mix several samples so they arent a plain thinking run
+            if run["config"]["model"] != modelId or "strategy" in run["config"]:
+                continue
+            if run["config"]["thinking"] == "off":
+                offRun = run
+            elif run["config"]["thinking"] == "on":
+                onRuns.append(run)
+
+        if offRun is None or len(onRuns) == 0:
+            continue
+
+        # only questions every run answered so the per question averages line up
+        sharedIds = set(offRun["rowsById"])
+        for onRun in onRuns:
+            sharedIds = sharedIds & set(onRun["rowsById"])
+
+        for level in difficultyLevels + ["all"]:
+            groupKeys = []
+            offValues = []
+            onValues = []
+            offTokens = []
+            onTokens = []
+
+            for devIdx in sorted(sharedIds):
+                offRow = offRun["rowsById"][devIdx]
+                if level != "all" and offRow["difficulty"] != level:
+                    continue
+
+                exTotal = 0
+                tokenTotal = 0
+                for onRun in onRuns:
+                    exTotal = exTotal + onRun["rowsById"][devIdx]["ex"]
+                    tokenTotal = tokenTotal + onRun["rowsById"][devIdx]["n_output_tokens"]
+
+                groupKeys.append(goldGroupKey(offRow))
+                offValues.append(offRow["ex"])
+                onValues.append(exTotal / len(onRuns))
+                offTokens.append(offRow["n_output_tokens"])
+                onTokens.append(tokenTotal / len(onRuns))
+
+            gain = statistics.mean(onValues) - statistics.mean(offValues)
+            gainLow, gainHigh = pairedGainInterval(groupKeys, offValues, onValues)
+            extraTokens = statistics.mean(onTokens) - statistics.mean(offTokens)
+
+            # ex points gained for every thousand extra output tokens
+            # its interval treats the token cost as fixed since the mean token count moves far less than the gain does
+            costInThousands = extraTokens / 1000
+
+            tableRows.append({
+                "model": modelId.split("/")[-1],
+                "difficulty": level,
+                "n": len(offValues),
+                "n_seeds": len(onRuns),
+                "ex_off": statistics.mean(offValues),
+                "ex_on": statistics.mean(onValues),
+                "gain": gain,
+                "gain_ci_low": gainLow,
+                "gain_ci_high": gainHigh,
+                "tokens_off": statistics.mean(offTokens),
+                "tokens_on": statistics.mean(onTokens),
+                "extra_tokens": extraTokens,
+                "points_per_1k_tokens": 100 * gain / costInThousands,
+                "points_per_1k_ci_low": 100 * gainLow / costInThousands,
+                "points_per_1k_ci_high": 100 * gainHigh / costInThousands,
+            })
+
+    return tableRows
+
+
+def findTrivialGoldIds(rows: list) -> set:
+    """
+    questions whose gold answer is empty or one lone 0 or null
+    a query with the wrong logic can land on those by accident
+    since an impossible filter or a count over nothing gives the same result
+    so ex might call it right when its not
+    """
+    trivialIds = set()
+
+    for row in rows:
+        connection = sqlite3.connect(getDbPath(row["db_id"]))
+        connection.text_factory = decodeIgnoringBadBytes
+        goldResult = connection.execute(row["gold"]).fetchall()
+        connection.close()
+
+        if len(goldResult) == 0:
+            trivialIds.add(row["dev_idx"])
+        elif len(goldResult) == 1 and len(goldResult[0]) == 1 and goldResult[0][0] in (0, None):
+            trivialIds.add(row["dev_idx"])
+
+    return trivialIds
+
+
+def addPessimisticEx(runs: list, trivialIds: set):
+    """
+    worst case ex where every pass on a trivial gold answer that em also rejects counts as wrong
+    em rejecting it doesnt prove it was luck since em also rejects valid rewrites
+    so this is a bound on how much luck could be in ex and not an estimate of it
+    only lives in memory and never gets written back to the scored files
+    """
+    for run in runs:
+        for row in run["rows"]:
+            couldBeLuck = row["dev_idx"] in trivialIds and row["ex"] == 1 and row["em"] == 0
+            if couldBeLuck:
+                row["ex_pessimistic"] = 0
+            else:
+                row["ex_pessimistic"] = row["ex"]
+
+
+def buildCoincidenceTable(runs: list, trivialIds: set) -> list:
+    tableRows = []
+
+    for run in runs:
+        rightOnTrivial = 0
+        rightButEmWrong = 0
+        exTotal = 0
+        pessimisticTotal = 0
+
+        for row in run["rows"]:
+            exTotal = exTotal + row["ex"]
+            pessimisticTotal = pessimisticTotal + row["ex_pessimistic"]
+
+            if row["dev_idx"] in trivialIds and row["ex"] == 1:
+                rightOnTrivial = rightOnTrivial + 1
+                if row["em"] == 0:
+                    rightButEmWrong = rightButEmWrong + 1
+
+        nRows = len(run["rows"])
+
+        tableRows.append({
+            "run": run["label"],
+            "n": nRows,
+            "n_trivial_gold": len(trivialIds),
+            "right_on_trivial": rightOnTrivial,
+            "ex_on_trivial": rightOnTrivial / len(trivialIds),
+            "right_on_trivial_em_wrong": rightButEmWrong,
+            "ex": exTotal / nRows,
+            "ex_pessimistic": pessimisticTotal / nRows,
+            "ex_drop": (exTotal - pessimisticTotal) / nRows,
+        })
 
     return tableRows
 
@@ -649,9 +815,16 @@ def main():
     errorRows = buildErrorTable(runs)
     componentRows = buildComponentTable(runs)
     efficiencyRows = buildEfficiencyTable(runs)
-    mcnemarRows = buildMcNemarTable(runsByName)
+    mcnemarRows = buildMcNemarTable(runsByName, ["ex", "em"])
     seedRows = buildSeedTable(runs)
     settingsRows = buildSettingsTable(runs)
+    thinkingRows = buildThinkingTable(runs)
+
+    # gold answers are the same in every run so any runs rows will do
+    trivialIds = findTrivialGoldIds(runs[0]["rows"])
+    addPessimisticEx(runs, trivialIds)
+    coincidenceRows = buildCoincidenceTable(runs, trivialIds)
+    pessimisticRows = buildMcNemarTable(runsByName, ["ex_pessimistic"])
 
     summaryDir.mkdir(parents = True, exist_ok = True)
     writeCsv(accuracyRows, summaryDir / "accuracy.csv")
@@ -661,6 +834,9 @@ def main():
     writeCsv(mcnemarRows, summaryDir / "mcnemar.csv")
     writeCsv(seedRows, summaryDir / "seeds.csv")
     writeCsv(settingsRows, summaryDir / "settings.csv")
+    writeCsv(thinkingRows, summaryDir / "thinking.csv")
+    writeCsv(coincidenceRows, summaryDir / "coincidence.csv")
+    writeCsv(pessimisticRows, summaryDir / "mcnemar_pessimistic.csv")
 
     # one readable file with every table in it
     sections = []
@@ -701,6 +877,25 @@ def main():
     sections.append("\n## Seed variation\n")
     sections.append(toMarkdown(seedRows, [
         "model", "thinking", "seeds", "ex_mean", "ex_sd", "ex_min", "ex_max", "em_mean", "em_sd",
+    ]))
+
+    sections.append("\n## Thinking gain by difficulty\n")
+    sections.append("thinking values are averaged over every seed of a size per question before comparing\n")
+    sections.append(toMarkdown(thinkingRows, [
+        "model", "difficulty", "n", "n_seeds", "ex_off", "ex_on", "gain", "gain_ci_low", "gain_ci_high",
+        "tokens_off", "tokens_on", "extra_tokens", "points_per_1k_tokens", "points_per_1k_ci_low", "points_per_1k_ci_high",
+    ]))
+
+    sections.append("\n## Coincidental EX bound\n")
+    sections.append(f"{len(trivialIds)} of {len(runs[0]['rows'])} gold answers are empty or a lone 0 or null\n")
+    sections.append(toMarkdown(coincidenceRows, [
+        "run", "right_on_trivial", "ex_on_trivial", "right_on_trivial_em_wrong", "ex", "ex_pessimistic", "ex_drop",
+    ]))
+
+    sections.append("\n## McNemar tests with pessimistic EX\n")
+    sections.append(toMarkdown(pessimisticRows, [
+        "family", "question", "metric", "first_acc", "second_acc", "difference", "difference_ci_low", "difference_ci_high",
+        "only_first_right", "only_second_right", "p_value", "p_holm",
     ]))
 
     sections.append("\n## Run settings\n")
