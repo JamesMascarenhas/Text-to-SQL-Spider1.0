@@ -16,6 +16,7 @@ tables it makes
   seeds           mean and spread across seeds wherever there are repeat runs
   settings        the run settings straight from each config for the methodology
   thinking        what turning thinking on buys at each qwen3 size and difficulty and what it costs in tokens
+  em parser       how many predictions spiders 2018 parser cant read so em scores them 0 and how many of those ex calls right
   coincidence     an upper bound on ex passes that could be luck because the gold answer is empty or a lone 0 or null
                   plus the planned comparisons rerun with every one of those counted as wrong
 
@@ -640,6 +641,49 @@ def buildThinkingTable(runs: list) -> list:
     return tableRows
 
 
+def buildEmParserTable(runs: list) -> list:
+    """
+    em only works on queries spiders 2018 parser can read and the official script scores the rest as 0
+    newer sql that runs fine still fails that parser so this counts how much of the em to ex gap is just the parser
+    predictions with no sql at all are left out since theyre wrong on both metrics anyway
+    """
+    tableRows = []
+
+    for run in runs:
+        nPredictions = 0
+        unparseable = 0
+        unparseableRuns = 0
+        unparseableExRight = 0
+        exRight = 0
+
+        for row in run["rows"]:
+            if row.get("pred_sql") is None:
+                continue
+            nPredictions = nPredictions + 1
+            exRight = exRight + row["ex"]
+
+            if not row["em_parse_ok"]:
+                unparseable = unparseable + 1
+                if row["exec_error"] is None:
+                    unparseableRuns = unparseableRuns + 1
+                if row["ex"] == 1:
+                    unparseableExRight = unparseableExRight + 1
+
+        tableRows.append({
+            "run": run["label"],
+            "n_predictions": nPredictions,
+            "unparseable": unparseable,
+            "unparseable_share": unparseable / nPredictions,
+            "unparseable_but_runs": unparseableRuns,
+            "unparseable_but_ex_right": unparseableExRight,
+            "ex_right": exRight,
+            # the share of ex correct answers that em scored 0 only because it couldnt read them
+            "ex_right_lost_to_parser": unparseableExRight / exRight,
+        })
+
+    return tableRows
+
+
 def findTrivialGoldIds(rows: list) -> set:
     """
     questions whose gold answer is empty or one lone 0 or null
@@ -819,6 +863,7 @@ def main():
     seedRows = buildSeedTable(runs)
     settingsRows = buildSettingsTable(runs)
     thinkingRows = buildThinkingTable(runs)
+    emParserRows = buildEmParserTable(runs)
 
     # gold answers are the same in every run so any runs rows will do
     trivialIds = findTrivialGoldIds(runs[0]["rows"])
@@ -835,6 +880,7 @@ def main():
     writeCsv(seedRows, summaryDir / "seeds.csv")
     writeCsv(settingsRows, summaryDir / "settings.csv")
     writeCsv(thinkingRows, summaryDir / "thinking.csv")
+    writeCsv(emParserRows, summaryDir / "em_parser.csv")
     writeCsv(coincidenceRows, summaryDir / "coincidence.csv")
     writeCsv(pessimisticRows, summaryDir / "mcnemar_pessimistic.csv")
 
@@ -884,6 +930,12 @@ def main():
     sections.append(toMarkdown(thinkingRows, [
         "model", "difficulty", "n", "n_seeds", "ex_off", "ex_on", "gain", "gain_ci_low", "gain_ci_high",
         "tokens_off", "tokens_on", "extra_tokens", "points_per_1k_tokens", "points_per_1k_ci_low", "points_per_1k_ci_high",
+    ]))
+
+    sections.append("\n## EM parser failures\n")
+    sections.append(toMarkdown(emParserRows, [
+        "run", "n_predictions", "unparseable", "unparseable_share", "unparseable_but_runs",
+        "unparseable_but_ex_right", "ex_right", "ex_right_lost_to_parser",
     ]))
 
     sections.append("\n## Coincidental EX bound\n")
