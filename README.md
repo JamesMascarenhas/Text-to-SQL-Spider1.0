@@ -1,4 +1,4 @@
-# CISC 839 Assignment 1: Text-to-SQL on Spider 1.0
+Text-to-SQL on Spider 1.0
 
 Code for every experiment in the report:
 
