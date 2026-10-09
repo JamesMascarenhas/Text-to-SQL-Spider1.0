@@ -85,7 +85,7 @@ python src/sanityCheck.py
 In a Colab notebook with an **L4 GPU** runtime:
 
 ```bash
-!git clone <this repository's URL> a1      # or upload and unzip the submitted code folder
+!git clone <(https://github.com/JamesMascarenhas/cisc839-a1)> a1      # or upload and unzip the submitted code folder
 %cd a1
 !pip install -q -r requirements-gpu.txt    # installs vllm 0.30.0, which brings torch and transformers
 ```
