@@ -1,0 +1,81 @@
+% slots for James to write into
+% red todo text shows in the pdf and % lines are notes that never print
+
+\noindent\textbf{RQ3:} To what extent does execution-based self-consistency (EBSC) improve Qwen3-4B with thinking?
+
+\subsection*{Methodology}
+
+\paragraph{Model and why it is interesting to improve.}
+\todo{Qwen3-4B thinking, seed 42, the Task 1 reasoning run. It ties the 8B with thinking (Holm $p$ 1.00) at 2.6 times less time per question and ties Coder 7B, so the question is whether a small reasoning model can pull ahead. Sampling leaves recoverable room: at least one of 5 samples is right on 85.8\% of questions against 79.4\% for one sample.}
+
+\paragraph{The improved solution.}
+\todo{Option A (improving reasoning), no parameters changed. Name it, motivate it \citep{wang2023selfconsistency}: Task 1 shows 82\% of the 4B's errors are logic errors and only 4\% crash, so errors vary between samples; voting on execution results and not SQL text because many different queries are equivalent \citep{dong2023c3}. State the expectation: a small overall gain concentrated on hard and extra hard, where the room is largest (DAIL-SQL gained only +0.4 from self-consistency, \citealp{gao2024dailsql}). Then the method step by step: candidates from seeds 42, 66, 73, 137, 255 ($N$ = 5) or 42, 66, 73 ($N$ = 3); execute each with the 30 s limit and drop crashes, timeouts and missing predictions; group identical result rows ignoring row order; biggest group wins, ties go to the group holding the shortest trace \citep{hassid2025overthink}, and the shortest trace's query in the winning group is submitted; if every candidate failed, seed 42's query stands. Ties decided 12 of 1,034 questions. The rules were fixed before any self-consistency result was seen.}
+
+\paragraph{Evaluation.}
+\todo{Same 1,034 questions, metrics, difficulty levels and scorer as Task 1, against the original seed 42 run. Primary test fixed before the $N$ = 5 results existed: $N$ = 5 vs single sample, exact McNemar plus the bootstrap interval. Secondary, Holm corrected together: $N$ = 3 vs single, and $N$ = 5 vs Coder 7B. Sensitivity checks: ties by seed order, keeping the baseline's own query whenever it is in the winning group, and pessimistic EX. In this study the five samples already existed, so voting cost no new generation, but a deployment would pay for all five.}
+
+\subsection*{Results}
+
+\paragraph{Original against improved.}
+\todo{Present Table~\ref{tab:sc} (required single table) and Figure~\ref{fig:ladder}. Sensitivity in text: ties by seed order 80.0 (+0.6, 24 / 18, $p$ 0.44); keep the baseline query 80.5 (+1.1 [$-$0.2, +2.4], 29 / 18, $p$ 0.14); pessimistic EX +1.5 [+0.1, +2.9], $p$ 0.063. $N$ = 5 vs Coder 7B: 80.6 vs 80.0, $p$ 0.68.}
+
+\begin{table}[htbp]
+\centering
+\caption{Single sample against execution-based self-consistency for Qwen3-4B thinking, overall and by difficulty.}
+\label{tab:sc}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\input{tables/selfConsistency.tex}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} Fixed / broken counts questions the vote turned right or wrong compared with the single sample. The $N$ = 5 test was fixed in advance as the primary test, so it is not corrected; the $N$ = 3 Holm value is corrected with the other secondary test. Tokens per question are summed over all samples. Best of 5 is the share of questions where at least one sample was right.
+\end{minipage}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.85\linewidth]{compute_ladder.png}
+\caption{Qwen3-4B EX by difficulty as test-time compute is added. The dashed line is the best of 5 upper bound.}
+\label{fig:ladder}
+\end{figure}
+
+\paragraph{Scaling and agreement.}
+\todo{Present Table~\ref{tab:scaling}: flat after $N$ = 3; the $N$ = 3 result is inside the spread of other 3 seed subsets; all 5 agree on 79.4\% of questions and 88.2\% of those are right; low agreement flags wrong answers with AUROC 0.697.}
+
+\begin{table}[htbp]
+\centering
+\caption{Voted EX by number of samples, and accuracy by how many samples agreed.}
+\label{tab:scaling}
+\small
+\input{tables/scaling.tex}
+
+\vspace{2pt}
+\begin{minipage}{0.85\linewidth}\footnotesize
+\textit{Note.} For each $N$ the vote is repeated over every subset of $N$ of the five seeds and averaged, so no single seed decides the curve.
+\end{minipage}
+\end{table}
+
+\paragraph{Examples.}
+\todo{Walk through Table~\ref{tab:examples}: dev 6, the majority chose Song\_Name where the baseline chose Name; dev 137, the majority filtered on Model = 'volvo' where the baseline used Make = 'Volvo'; dev 111, three of five samples wrote the car name in the wrong case and returned no rows, so a shared mistake outvoted the correct samples.}
+
+\begin{table}[htbp]
+\centering
+\caption{Two questions the vote fixed and one it broke.}
+\label{tab:examples}
+\scriptsize
+\input{tables/examples.tex}
+\end{table}
+
+\paragraph{Cost.}
+\todo{Reference Figure~\ref{fig:costvoting}: 5.0 times the tokens, 11.1 s against 2.1 s per question; Coder 7B reaches the same EX with about 34 tokens per question against 4,367.}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.75\linewidth]{cost_tradeoff_voting.png}
+\caption{EX against mean output tokens with self-consistency added. Grey points are the other Task 1 configurations; the green 4B point is the five seed mean (79.0), while Table~\ref{tab:sc} uses seed 42 (79.4).}
+\label{fig:costvoting}
+\end{figure}
+
+\paragraph{Answering RQ3.}
+\todo{State whether the expectation held, with numbers: direction and location held (hard +4.6, extra +2.4, easy and medium +0.0) and the gain was small (+1.2), but it is not significant ($p$ 0.126, interval $-$0.3 to +2.6) and recovers only 1.2 of the 6.4 available points. Why so little: shared mistakes (about 97 questions unanimous but wrong; dev 111). Practical verdict and future work (a verifier so a correct minority can win; more diverse sampling; vote only where samples disagree).}

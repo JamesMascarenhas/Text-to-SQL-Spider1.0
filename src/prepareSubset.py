@@ -1,11 +1,4 @@
 """
-labels every spider dev example with its official difficulty and then draws the evaluation subset
-the sample is stratified and proportional so it keeps the same mix of easy medium hard and extra as the full dev set
-that way overall accuracy on the subset is a fair estimate for full dev and every difficulty level is guaranteed to show up
-an examples id is just its position in dev.json counting from 0 since dev.json has no id field
-runs on the mac
-
-how to run
     python src/prepareSubset.py --n 400      stratified subset of 400
     python src/prepareSubset.py --n 1034     the whole dev set
 """

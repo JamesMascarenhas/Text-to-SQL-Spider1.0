@@ -1,9 +1,6 @@
 """
 builds the prompt for every example in the evaluation subset
-writes outputs/prompts.jsonl which holds chat messages that are the same for every model
-that file plus src is all colab needs so the spider data never has to leave the mac
 each models tokenizer turns the messages into its own prompt format later at inference time
-runs on the mac after prepareSubset.py
 
 how to run
     python src/buildPrompts.py              schema only as CREATE TABLE statements

@@ -1,0 +1,104 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[round]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{../outputs/figures/}{../outputs/traceAnalysis/}}
+
+\captionsetup{font=small, labelfont=bf}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  columns=fullflexible,
+  upquote=true,
+  frame=single,
+}
+
+% writing slots show up in red so nothing gets left in by accident
+% delete the todo once the paragraph is written
+\newcommand{\todo}[1]{\textcolor{red}{[#1]}}
+
+\title{CISC 839 Assignment 1: Text-to-SQL on Spider 1.0}
+\author{James Mascarenhas}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Task 1 -- RQ1}
+\subsection*{Methodology}
+\input{sections/task1_methodology.tex}
+
+\subsection*{Results}
+\input{sections/task1_results.tex}
+
+\clearpage
+\section*{Task 2 -- RQ2}
+\input{sections/task2.tex}
+
+\clearpage
+\section*{Task 3 -- RQ3}
+\input{sections/task3.tex}
+
+\clearpage
+\section*{Task 4 -- AI Usage Declaration}
+\todo{Write this yourself. Tools: Claude (Anthropic), used through the Claude app in this course project (configured model claude-opus-5-5); Google's AI assistant (name the exact product). What Claude did: wrote all Python code, which you reviewed and restyled; proposed statistical methods and analyses; found scorer issues; built the figures and the LaTeX tables, captions and table notes; checked citations; drafted the outline; and drafted some report sentences you kept (say which sections). What Google's assistant did: suggested analyses, two adopted after checking. What you did: research direction and every design decision, model and seed choices, all inference on Colab, review of every script and change, verification, and the report prose. Verification: gold vs gold sanity check, agreement with the official evaluator on every run, seed replication, citation checks.}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\clearpage
+\appendix
+
+\section{Prompt}
+\label{app:prompt}
+The system and user messages, exactly as sent before each model's chat template was applied:
+\input{tables/promptTemplate.tex}
+
+The user message for the first dev question (dev 0, database \texttt{concert\_singer}):
+\input{tables/promptExample.tex}
+
+\section{Software and revisions}
+\label{app:software}
+Table~\ref{tab:software} lists the software versions and full revision hash for every generation run.
+\begin{table}[htbp]
+\centering
+\caption{Software versions and full Hugging Face revision for every generation run.}
+\label{tab:software}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{\input{tables/software.tex}}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} Every run used vLLM 0.30.0 on one NVIDIA L4 in a single Colab Pro session. Colab updated transformers between sessions, so runs used 5.17.0 or 5.18.0; generation is done by the pinned vLLM and chat templates come from the pinned revisions.
+\end{minipage}
+\end{table}
+
+\section{Component matching}
+\label{app:components}
+Table~\ref{tab:components} gives the component matching F1 that the Spider paper reports.
+\begin{table}[htbp]
+\centering
+\caption{Component matching F1 (\%) over all questions, as reported by the Spider evaluation script.}
+\label{tab:components}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\input{tables/components.tex}
+\end{table}
+
+\end{document}

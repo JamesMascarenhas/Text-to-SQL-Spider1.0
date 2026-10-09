@@ -1,0 +1,15 @@
+\begin{tabular}{@{}llllllll l@{}}
+\toprule
+Model (Hugging Face ID) & Family & Params & Non-emb. & Modes & Decoding & Max new tok. & Precision & Rev. \\
+\midrule
+\texttt{Qwen/Qwen2.5-Coder-0.5B-Instruct} & Coder & 0.49B & 0.36B & standard & greedy & 512 & bf16 & \texttt{ea3f247} \\
+\texttt{Qwen/Qwen2.5-Coder-1.5B-Instruct} & Coder & 1.54B & 1.31B & standard & greedy & 512 & bf16 & \texttt{2e1fd39} \\
+\texttt{Qwen/Qwen2.5-Coder-3B-Instruct} & Coder & 3.09B & 2.77B & standard & greedy & 512 & bf16 & \texttt{488639f} \\
+\texttt{Qwen/Qwen2.5-Coder-7B-Instruct} & Coder & 7.61B & 6.53B & standard & greedy & 512 & bf16 & \texttt{c03e6d3} \\
+\texttt{Qwen/Qwen2.5-Coder-7B-Instruct-AWQ} & Coder & 7.61B & 6.53B & standard & greedy & 512 & 4 bit weights, fp16 & \texttt{8e8ed24} \\
+\midrule
+\texttt{Qwen/Qwen3-1.7B} & Qwen3 & 1.7B & 1.4B & off / on & greedy / sampled & 512 / 8,192 & bf16 & \texttt{70d244c} \\
+\texttt{Qwen/Qwen3-4B} & Qwen3 & 4.0B & 3.6B & off / on & greedy / sampled & 512 / 8,192 & bf16 & \texttt{1cfa9a7} \\
+\texttt{Qwen/Qwen3-8B} & Qwen3 & 8.2B & 6.95B & off / on & greedy / sampled & 512 / 8,192 & bf16 & \texttt{b968826} \\
+\bottomrule
+\end{tabular}

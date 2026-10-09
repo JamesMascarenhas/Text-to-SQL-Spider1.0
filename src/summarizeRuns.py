@@ -1,11 +1,4 @@
 """
-pulls every scored full run together into the tables the report needs
-reads the scored files and summary files that scoring.py writes plus the config files from colab
-only looks at runs whose names start with full- so pilots never sneak in
-works with whatever has been scored so far so it can be rerun as more runs finish
-runs on the mac and only needs the standard library
-the coincidence table runs each gold query once on its spider database
-
 tables it makes
   accuracy        em and ex and ex with gold values by difficulty plus a 95 percent interval on overall ex
   errors          every wrong answer put in exactly one bucket so the ex gap can be explained
@@ -19,8 +12,6 @@ tables it makes
   em parser       how many predictions spiders 2018 parser cant read so em scores them 0 and how many of those ex calls right
   coincidence     an upper bound on ex passes that could be luck because the gold answer is empty or a lone 0 or null
                   plus the planned comparisons rerun with every one of those counted as wrong
-
-writes csv files and a summary.md into outputs/summary
 
 how to run
     python src/summarizeRuns.py

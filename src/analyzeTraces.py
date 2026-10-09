@@ -1,17 +1,10 @@
 """
-task 2 which asks how features of the reasoning traces relate to text to sql performance
-reads the scored files of thinking runs and turns every trace into a handful of measurable features
-then relates each feature to correctness and to difficulty and checks whether it says anything beyond trace length
-runs on the mac after scoring
-
 features
   logLength       log of the number of reasoning tokens since effort and the models own uncertainty show up as length
   branchPer1k     how often the trace says alternatively per 1000 words which is the slides explore another branch operator
   sqlDrafts       how many uppercase SELECT keywords the trace writes which is how much sql it drafts and redrafts
   waitPer1k       how often it says wait per 1000 words which is the slides reconsider operator and serves as a contrast
   answerInTrace   whether the final sql appears word for word in the trace as a surface check on faithfulness
-
-correctness is execution accuracy since em misjudges these models as task 1 showed
 
 statistics
   descriptives    median and interquartile range by correctness and difficulty
@@ -22,8 +15,6 @@ statistics
                   standard errors are clustered by gold query since spider paraphrase pairs share one
   faithfulness    share of answers found in the trace by correctness and difficulty with a fisher exact test
   replication     the key numbers again on the other seeds and on other model sizes
-
-writes csv files plus figures and a traceAnalysis.md into outputs/traceAnalysis
 
 how to run
     python src/analyzeTraces.py
@@ -355,6 +346,15 @@ def summarizeForReplication(runName: str, features: pd.DataFrame) -> dict:
 
 # figures
 
+def readableRunName(runName: str) -> str:
+    # figure titles show the model and seed instead of the run filename
+    sizeLabel = runName.replace("full-qwen3-", "").split("-")[0].upper()
+    seedLabel = "42"
+    if "-seed" in runName:
+        seedLabel = runName.split("-seed")[-1]
+    return f"Qwen3-{sizeLabel} thinking, seed {seedLabel}"
+
+
 def plotFeatureBoxes(features: pd.DataFrame, runName: str):
     # one panel per feature with right and wrong side by side at every difficulty level
     figure, axes = plt.subplots(1, len(mainFeatures), figsize = (4.2 * len(mainFeatures), 4))
@@ -386,7 +386,7 @@ def plotFeatureBoxes(features: pd.DataFrame, runName: str):
     axes[0].plot([], [], color = "#DD8452", linewidth = 8, label = "wrong")
     axes[0].legend(loc = "upper left", fontsize = 8)
 
-    figure.suptitle(f"Trace features by difficulty and correctness ({runName}, outliers hidden)", fontsize = 11)
+    figure.suptitle(f"Trace features by difficulty and correctness ({readableRunName(runName)}, outliers hidden)", fontsize = 11)
     figure.tight_layout()
     figure.savefig(analysisDir / f"boxplots_{runName}.png", dpi = 200)
     plt.close(figure)
@@ -427,7 +427,7 @@ def plotAccuracyByLength(features: pd.DataFrame, runName: str):
 
     axis.set_xlabel("median reasoning tokens in the length quartile (log scale)")
     axis.set_ylabel("execution accuracy")
-    axis.set_title(f"Accuracy by trace length within each difficulty ({runName})", fontsize = 10)
+    axis.set_title(f"Accuracy by trace length within each difficulty ({readableRunName(runName)})", fontsize = 10)
     axis.legend(title = "difficulty", fontsize = 8)
     figure.tight_layout()
     figure.savefig(analysisDir / f"accuracy_by_length_{runName}.png", dpi = 200)

@@ -5,3 +5,9 @@ outputs/
 __pycache__/
 .DS_Store
 *.pdf
+*.docx
+*.aux
+*.log
+*.bbl
+*.blg
+*.out

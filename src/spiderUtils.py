@@ -1,8 +1,6 @@
 """
-shared stuff for the spider text to sql experiments
-paths and data loading and the schema text and the prompt wording and pulling sql out of model replies
 every other script imports from here so every model sees the exact same inputs
-runs on the mac and on colab and only needs the standard library so colab needs nothing extra for it
+runs on the local comp and on colab and only needs the standard library so colab needs nothing extra for it
 """
 
 import json

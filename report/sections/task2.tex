@@ -1,0 +1,150 @@
+% slots for James to write into
+% red todo text shows in the pdf and % lines are notes that never print
+
+\subsection*{Methodology}
+
+\todo{Which traces: primary is the 1,034 traces of Qwen3-4B thinking, seed 42 (the Task 1 reasoning run and the Task 3 base). Replication on 10 more thinking runs (4B seeds 66, 73, 137, 255; 1.7B and 8B seeds 42, 66, 73), 11,374 traces in total. Correctness is EX, since Task 1 showed EM misjudges these models. Every trace is included, unfinished ones too.}
+
+\paragraph{Features.}
+\todo{For each feature give its definition, why it is relevant to Text-to-SQL, and how it was computed (Table~\ref{tab:features}). Relevance: length tracks planning effort on joins and nesting but can also mean the model got lost; ``alternatively'' marks weighing another formulation; ``wait'' marks self checking; drafts measure drafting and redrafting SQL; answer in trace is a surface faithfulness check \citep{chen2025reasoning}.}
+
+\begin{table}[htbp]
+\centering
+\caption{Trace features: definition and computation, and why each matters for Text-to-SQL.}
+\label{tab:features}
+\scriptsize
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.17\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.33\linewidth}@{}}
+\toprule
+Feature & Definition and computation & Relevance to Text-to-SQL \\
+\midrule
+Log reasoning tokens & Natural log of the number of tokens before \texttt{</think>}, as counted by vLLM. Log because counts are right skewed (median 498, maximum 7,174) & Harder queries need more planning (joins, nesting, schema linking), but a long trace can also mean the model got lost \citep{tian2026week3} \\
+``Alternatively'' per 1,000 words & Whole-word count of ``alternatively'' in the lowercased trace, divided by the trace's word count, times 1,000. Words are runs of letters, digits and underscores, with the \texttt{<think>} tag removed & Marks exploring another formulation, such as a JOIN against a subquery or which table holds a column (``explore another branch'', \citealp{tian2026week3}) \\
+``Wait'' per 1,000 words & The same computation for the word ``wait'' & Marks self checking a column name, condition or join key (``reconsider / verify'', \citealp{tian2026week3}) \\
+SQL drafts & Count of the uppercase whole word SELECT in the trace. Case sensitive, since drafted SQL is in capitals and lowercase ``select'' is usually prose & A SQL specific measure of drafting and redrafting, including finding the answer and then ``correcting'' it away \citep{tian2026week3} \\
+Answer in trace (0/1) & 1 if the final SQL appears verbatim in the trace after normalizing both (lowercase, collapsed whitespace, no spaces around punctuation, one quote style, no trailing semicolon) & A surface check on faithfulness: whether the visible reasoning contains the answer given \citep{chen2025reasoning} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} A query with a subquery contains two SELECTs, so drafts slightly over count. Word counts are crude lexical measures. The first four features get the full set of tests; answer in trace gets a single test
+\end{minipage}
+\end{table}
+
+\paragraph{Statistical tests.}
+\todo{Name each test and why it fits the data: Mann--Whitney U with rank-biserial effect size for feature vs correctness (skewed, often zero, no normality assumption); Kruskal--Wallis and Spearman for feature vs difficulty (rank based, Spearman uses the ordering); AUROC overall and within each difficulty (threshold free, within level removes the confound that hard questions are both long and often wrong); logistic regression of correctness on difficulty plus the feature, then plus log length, with errors clustered by gold query (does a feature add anything beyond length; paraphrase pairs are not independent, \citealp{miller2024errorbars}); Fisher's exact test for answer in trace vs correctness (small cell); replication on 10 more runs as the safeguard for unadjusted exploratory tests.}
+
+\begin{table}[htbp]
+\centering
+\caption{Statistical tests and why each fits the data.}
+\label{tab:tests}
+\scriptsize
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.2\linewidth}>{\raggedright\arraybackslash}p{0.3\linewidth}>{\raggedright\arraybackslash}X@{}}
+\toprule
+Relates & Test & Why it fits \\
+\midrule
+Feature and correctness & Mann--Whitney U with rank-biserial effect size & Features are skewed and often zero, so a rank test avoids assuming normality \\
+Feature and difficulty & Kruskal--Wallis over the four levels; Spearman $\rho$ with difficulty coded 0 to 3 & Rank based; Spearman also uses the ordering of difficulty \\
+Separating right from wrong & AUROC overall and within each difficulty level & Threshold free; within each level it removes the confound that hard questions are both longer and more often wrong \\
+Correctness with difficulty held fixed & Logistic regression of correctness on difficulty and the feature, then also log length; standard errors clustered by gold query & Tests the association at fixed difficulty, then whether a feature adds anything beyond length; clustering because paraphrase pairs share a gold query and are not independent \citep{miller2024errorbars} \\
+Answer in trace and correctness & Fisher's exact test on the 2 $\times$ 2 table & One cell is small (about 50 traces without the answer) \\
+Robustness & Key results recomputed on the 10 replication runs & Results from a single run can be unstable \citep{tian2026week3} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} The tests are exploratory and $p$ values are not adjusted for multiple testing; replication across runs is the safeguard
+\end{minipage}
+\end{table}
+
+\subsection*{Results}
+
+\paragraph{Descriptive statistics.}
+\todo{Present Table~\ref{tab:descriptives}. Answer in trace: 95.2\% of final queries appear in the trace (98.4\% easy to 89.8\% extra); accuracy 79.1\% when in the trace and 86.0\% when not.}
+
+\begin{table}[htbp]
+\centering
+\caption{Trace features for Qwen3-4B thinking (seed 42) by correctness and difficulty, median [interquartile range].}
+\label{tab:descriptives}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{\input{tables/descriptives.tex}}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} Raw token counts are shown for readability; the tests use their log. Easy questions have only 20 wrong answers.
+\end{minipage}
+\end{table}
+
+\paragraph{Statistical results.}
+\todo{Present Table~\ref{tab:singletests}, Table~\ref{tab:regression} and Table~\ref{tab:replication}. Fisher's exact test for answer in trace vs correct: $p$ = 0.285.}
+% length mann whitney p 1.9e-35 rank biserial 0.55, auroc 0.78 overall and 0.61 to 0.79 within levels
+% with difficulty fixed each 2.7 fold longer trace multiplies the odds of being right by 0.33
+% alternatively and drafts matter alone (or 0.852 p 8.9e-5 and 0.953 p 0.002) but not beyond length (p 0.48 and 0.22)
+% wait never matters (auroc 0.45, p 0.59, the mann whitney p 0.037 is a negligible effect)
+% replication length p under 1e-8 in every run, alternatively and wait never significant beyond length, drafts only once (1.7b seed 73)
+
+\begin{table}[htbp]
+\centering
+\caption{Single feature tests against correctness and difficulty.}
+\label{tab:singletests}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\input{tables/singleTests.tex}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} AUROC above 0.5 means higher values go with wrong answers. Rank-biserial $r_{rb}$ = 2 $\times$ AUROC $-$ 1. Spearman $\rho$ is with difficulty as an ordered scale (0 to 3) and with log length.
+\end{minipage}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Logistic regression of correctness on each feature, odds ratio [95\% CI].}
+\label{tab:regression}
+\scriptsize
+\input{tables/regression.tex}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} Every model includes difficulty. Odds ratios are per one unit of the feature; for log length one unit is about 2.7 times longer. Standard errors are clustered by gold query.
+\end{minipage}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{The main Task 2 results recomputed on every thinking run.}
+\label{tab:replication}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\input{tables/replication.tex}
+
+\vspace{2pt}
+\begin{minipage}{\linewidth}\scriptsize
+\textit{Note.} ``Unfinished'' counts traces that reached the 8,192-token cap. Length OR and $p$ come from the logistic model with difficulty. The last three columns are each feature's $p$ value when added to difficulty and log length.
+\end{minipage}
+\end{table}
+
+\paragraph{Visualizations.}
+\todo{Present Figure~\ref{fig:boxplots} (required) and Figure~\ref{fig:lengthquartile}.}
+% hard is the exception in figure 6, shortest quarter 68 percent vs 86 for the second, then 72 and 52
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{boxplots_full-qwen3-4b-think.png}
+\caption{Trace features by difficulty and correctness for Qwen3-4B thinking, seed 42 (blue right, orange wrong, outliers hidden).}
+\label{fig:boxplots}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.65\linewidth]{accuracy_by_length_full-qwen3-4b-think.png}
+\caption{EX by trace length quartile within each difficulty level. Each point is a quarter of that level's questions, placed at its median length.}
+\label{fig:lengthquartile}
+\end{figure}
+
+\paragraph{Answering RQ2.}
+\todo{Interpret with numbers: length dominates; length also tracks difficulty; hard questions are the exception; branching and drafting are proxies for length; ``wait'' carries no signal; faithfulness check shows no relation; difference from the lecture notes; bridge to Task 3 (shortest trace tie break); limitations.}
+% one sentence answer from the outline
+% length is the only feature that relates reliably to correctness, wrong traces are about 2.5 times longer at every difficulty and across 11 runs and three sizes

@@ -1,22 +1,4 @@
 """
-task 1 figures built from the summary csv files so they always match the latest scoring
-runs on the mac after summarizeRuns.py
-
-figures
-  size curve      ex and em against parameter count for the coder family and qwen3 with and without thinking
-                  repeat seeds get averaged with a bar from the lowest to the highest seed
-                  the em panel next to the ex panel shows how flat em stays while ex climbs
-  cost tradeoff   ex against mean output tokens per question for every configuration
-                  including the 4 bit model and self consistency once those exist
-  by difficulty   ex at each spider difficulty for the coder sizes with the 4 bit model
-                  and for every qwen3 size with thinking off and on
-  thinking return what thinking adds at each size and difficulty with a 95 percent interval
-                  and how many ex points each thousand extra tokens buys
-  em against ex   overall em against overall ex for every configuration to show the two metrics rank models differently
-  compute ladder  task 3 view of qwen3 4b by difficulty going from no thinking to thinking to voting
-                  with the best of 5 upper bound marked over each group
-
-writes png files into outputs/figures
 needs selfConsistency.py to have run first for the compute ladder
 
 how to run

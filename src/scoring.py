@@ -1,11 +1,5 @@
 """
-scoring for spider predictions on the mac
-the official evaluation.py only prints totals but task 2 needs right or wrong for every single example
-so scoreExample redoes the official per example logic with the official functions
-then crossCheckWithOfficial runs the untouched official script on the same predictions and makes sure the totals agree
-also collects the papers component matching scores from the official output and saves everything to a summary file
-has to run from a terminal or with !python on colab and never inside a notebook cell
-the official execution check uses asyncio.run which breaks inside jupyter
+scoring for spider predictions on local comp
 
 how to run
     python src/scoring.py --run outputs/runs/<run name>.jsonl

@@ -1,22 +1,11 @@
 """
-generates sql for every prompt with vllm
-runs on a colab gpu and not the mac since vllm needs an nvidia card
-reads outputs/prompts.jsonl and appends one json line per example to outputs/runs/<run name>.jsonl
-saves after every chunk so if colab drops the session just rerun the same command and it skips whats done
-
-thinking modes
-  none   model has no reasoning mode like qwen2.5 coder so greedy decoding
-  on     qwen3 thinking mode with qwens recommended sampling since they warn greedy can loop forever when thinking
-  off    qwen3 with thinking switched off and greedy decoding
-         same weights as on so comparing the two isolates what reasoning itself adds
-
 how to run on colab
     !python src/runInference.py --model Qwen/Qwen2.5-Coder-1.5B-Instruct --name qwen25coder-1.5b --thinking none
     !python src/runInference.py --model Qwen/Qwen3-4B --name qwen3-4b-think --thinking on --maxNewTokens 8192
     !python src/runInference.py --model Qwen/Qwen3-4B --name qwen3-4b-think-seed2 --thinking on --maxNewTokens 8192 --seed 2
     !python src/runInference.py --model Qwen/Qwen2.5-Coder-7B-Instruct-AWQ --name qwen25coder-7b-awq --thinking none --dtype auto
 
-then score on the mac
+scoring on local comp
     python src/scoring.py --run outputs/runs/<run name>.jsonl
 """
 

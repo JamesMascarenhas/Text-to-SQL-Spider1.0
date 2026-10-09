@@ -1,0 +1,19 @@
+\begin{tabular}{@{}l rrrrr@{}}
+\toprule
+ & & Cannot be & Of those, & Of those, & EX-correct answers \\
+Configuration & Predictions & parsed (\%) & run & EX right & lost to the parser (\%) \\
+\midrule
+Coder 0.5B & 1034 & 507 (49.0) & 124 & 65 & 13.9 \\
+Coder 1.5B & 1034 & 516 (49.9) & 293 & 158 & 27.4 \\
+Coder 3B & 1034 & 499 (48.3) & 379 & 246 & 35.0 \\
+Coder 7B & 1034 & 328 (31.7) & 291 & 208 & 25.2 \\
+Coder 7B AWQ & 1034 & 336 (32.5) & 305 & 214 & 25.8 \\
+\midrule
+Qwen3-1.7B off & 1034 & 667 (64.5) & 543 & 345 & 55.5 \\
+Qwen3-1.7B on & 1032 & 418 (40.5) & 368 & 250 & 33.7 \\
+Qwen3-4B off & 1034 & 451 (43.6) & 410 & 262 & 35.6 \\
+Qwen3-4B on & 1034 & 403 (39.0) & 395 & 267 & 32.5 \\
+Qwen3-8B off & 1034 & 577 (55.8) & 558 & 388 & 50.7 \\
+Qwen3-8B on & 1032 & 443 (42.9) & 441 & 308 & 37.7 \\
+\bottomrule
+\end{tabular}

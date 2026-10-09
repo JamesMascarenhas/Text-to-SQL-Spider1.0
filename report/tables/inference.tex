@@ -1,0 +1,12 @@
+\begin{tabular}{@{}lll@{}}
+\toprule
+Setting & Coder and Qwen3 no thinking & Qwen3 thinking \\
+\midrule
+Decoding & greedy & sampling \\
+Temperature / top-p / top-k & 0 / 1.0 / off & 0.6 / 0.95 / 20 \\
+Max new tokens & 512 & 8,192 \\
+Reasoning & off & on (\texttt{enable\_thinking}) \\
+Seeds & 42 & 42, 66, 73 (plus 137, 255 for 4B) \\
+Context window & 16,384 (10,240 for 8B) & 16,384 (10,240 for 8B) \\
+\bottomrule
+\end{tabular}

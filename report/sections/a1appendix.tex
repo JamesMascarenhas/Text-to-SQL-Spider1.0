@@ -1,0 +1,98 @@
+\section{Prompt}
+\label{app:prompt}
+The system and user messages, exactly as sent before each model's chat template was applied:
+\input{tables/promptTemplate.tex}
+
+The user message for the first development question (dev 0, database \texttt{concert\_singer}):
+\input{tables/promptExample.tex}
+
+\section{Software and revisions}
+\label{app:software}
+Table~\ref{tab:software} lists the software versions and full revision hash for every generation run.
+\begin{table}[!htbp]
+\centering
+\caption{Software Versions and Full Hugging Face Revision for Every Generation Run}
+\label{tab:software}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{adjustbox}{max width=\linewidth}
+\input{tables/software.tex}
+\end{adjustbox}
+\par\vspace{3pt}{\raggedright\footnotesize\textit{Note.} Every run used vLLM 0.30.0 on one NVIDIA L4 in a single Colab Pro session. Colab updated transformers between sessions, so runs used 5.17.0 or 5.18.0; generation is done by the pinned vLLM and chat templates come from the pinned revisions\par}
+\end{table}
+
+\section{Component matching}
+\label{app:components}
+Table~\ref{tab:components} gives the component matching F1 reported by the Spider evaluation script for every configuration.
+\begin{table}[!htbp]
+\centering
+\caption{Component Matching F1 (\%) Over All Questions}
+\label{tab:components}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{adjustbox}{max width=\linewidth}
+\input{tables/components.tex}
+\end{adjustbox}
+\end{table}
+
+\FloatBarrier
+\section{Additional Task 3 figures}
+\label{app:task3figures}
+Figure~\ref{fig:ladder} shows Qwen3-4B execution accuracy by difficulty as test time compute is added, and Figure~\ref{fig:costvoting} places EBSC on the accuracy and cost plot from Task 1 (Figure~\ref{fig:3}).
+
+\begin{figure}[!htbp]
+\centering
+\caption{Qwen3-4B Execution Accuracy by Difficulty as Test Time Compute Is Added}
+\label{fig:ladder}
+\includegraphics[width=0.85\linewidth]{compute_ladder.png}
+\par\vspace{3pt}{\raggedright\footnotesize\textit{Note.} Bars use seed 42 for the single thinking sample. The dashed line is the best of 5 upper bound, the share of questions where at least one of the five samples was correct\par}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\caption{Execution Accuracy Against Mean Output Tokens with EBSC Added}
+\label{fig:costvoting}
+\includegraphics[width=0.7\linewidth]{cost_tradeoff_voting.png}
+\par\vspace{3pt}{\raggedright\footnotesize\textit{Note.} Grey points are the other Task 1 configurations. The green 4B point is the five seed mean (79.0\%), while Table~\ref{tab:13} uses seed 42 (79.4\%). Tokens for EBSC are summed over all samples\par}
+\end{figure}
+
+\FloatBarrier
+\clearpage
+\section{Numbers cited in the text that are not shown in a table or figure}
+\label{app:numbers}
+Table~\ref{tab:numbers} lists every number quoted in the text that does not appear directly in a table or figure, either because it comes from an output file or because it is calculated from values in a table.
+
+\begin{center}
+\captionof{table}{Numbers Quoted in the Text and Where They Come From}
+\label{tab:numbers}
+\renewcommand{\arraystretch}{1.0}
+\scriptsize
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.12\linewidth}>{\raggedright\arraybackslash}p{0.3\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.2\linewidth}@{}}
+\toprule
+Section & Value quoted & What it is & Source \\
+\midrule
+Task 1 Methodology & 19,646 outputs: 19,620 code block, 10 regular expression, 16 no prediction & How the final SQL was extracted from every single run output (19 runs of 1,034 questions); all 16 without a prediction ran out of tokens while reasoning & \path{outputs/runs/*_scored.jsonl} (\path{extract_status}) \\
+Task 1 Methodology & 16 of 11,374 thinking outputs; 0 to 3 per run & Thinking outputs that reached the 8,192 token limit & Unfinished column of Table~\ref{tab:12} \\
+Task 1 Methodology & 1 of 19,646 outputs & Outputs stopped by the 30 second execution limit & \path{outputs/runs/*_scored.jsonl} (\path{timed_out}) \\
+Task 1 Methodology & 28 questions & Questions whose EX with gold values was capped at 1,000 value combinations & \path{outputs/runs/*_scored.jsonl} (\path{ex_gold_values_capped}) \\
+\addlinespace
+Task 1 Results & raw $p$ = 0.024 & Qwen3 no thinking 4B to 8B on EX before Holm correction & \path{outputs/summary/mcnemar.csv} \\
+Task 1 Results & +2.4 & The same comparison under pessimistic EX (67.4\% against 69.8\%, raw $p$ = 0.055) & \path{outputs/summary/mcnemar_pessimistic.csv} \\
+Task 1 Results & 2.2 to 5.4 points & Drop in EX under pessimistic EX; 2.2 for Coder-7B and Coder-7B-AWQ, 5.4 for Qwen3-1.7B without thinking & \path{outputs/summary/coincidence.csv} (Table~\ref{tab:3} minus Table~\ref{tab:8}, unrounded) \\
+Task 1 Results & 25.5 times, 27 times, 1.9 times, more than 20 times, 2.6 times & Token and time ratios between configurations & Calculated from Table~\ref{tab:5} \\
+\addlinespace
+Task 2 Methodology & 2.6 times less time & Qwen3-8B against Qwen3-4B thinking, seconds per question (5.46 against 2.11) & Calculated from Table~\ref{tab:5} \\
+Task 2 Results & 2.6 and 2.7 times & Medium questions against hard and extra hard questions (446 against 174 and 166) & Calculated from the note to Table~\ref{tab:3} \\
+Task 2 Results & 2.5 times; 1.5 to 2.3 times & Median incorrect trace length over median correct trace length, overall and within each level & Calculated from Table~\ref{tab:9} \\
+Task 2 Results & 2.1 to 2.5 times & The same ratio across all 11 runs & Calculated from Table~\ref{tab:12} \\
+Task 2 Results & $p$ = 0.285 & Fisher's exact test for answer in trace against correctness & \path{outputs/traceAnalysis/traceAnalysis.md} \\
+Task 2 Results & Figure~\ref{fig:5} values & EX by length quartile, shortest to longest: easy 98.4, 93.4, 95.2, 80.6; medium 97.3, 92.7, 83.8, 62.5; hard 68.2, 86.0, 72.1, 52.3; extra hard 73.8, 63.4, 48.8, 47.6 & \path{outputs/traceAnalysis/features_full-qwen3-4b-think.csv} \\
+\addlinespace
+Task 3 Results & +4.6 and +2.4 & EBSC with N = 5 against the single sample on hard and extra hard questions & Calculated from Table~\ref{tab:13} \\
+Task 3 Results & 6.4 points & Best of 5 minus the single sample (85.8 against 79.4) & Calculated from Table~\ref{tab:13} \\
+Task 3 Results & five times; 128 times & EBSC tokens per question against the single sample (4,367 against 867) and against Coder-7B (4,367 against 34) & Calculated from Tables~\ref{tab:5} and \ref{tab:13} \\
+Task 3 Results & $p$ = 0.68 & EBSC with N = 5 against Coder-7B on EX (80.6\% against 80.0\%), exact McNemar, Holm corrected with the N = 3 test & \path{outputs/summary/mcnemar.csv} \\
+\bottomrule
+\end{tabularx}
+\par\vspace{3pt}{\raggedright\footnotesize\textit{Note.} Paths are relative to the root of the code repository\par}
+\end{center}

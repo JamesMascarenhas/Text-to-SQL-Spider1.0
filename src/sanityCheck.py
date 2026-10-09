@@ -3,9 +3,6 @@ checks to run before trusting any model results
   1  sql extraction handles the reply formats we expect
   2  scoring the gold queries against themselves gives 100 percent on em and ex and ex with gold values from our scorer and the official one
   3  replies with nothing extracted get scored wrong the same way by both
-if any of these fail the pipeline is broken and model numbers would mean nothing
-rerun it any time spiderUtils.py or scoring.py changes
-runs on the mac
 
 how to run
     python src/sanityCheck.py

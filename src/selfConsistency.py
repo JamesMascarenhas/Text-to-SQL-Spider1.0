@@ -1,11 +1,4 @@
 """
-task 3 which is execution based self consistency for qwen3 4b with thinking on
-every seed of the thinking run is one independent sample of reasoning for every question
-each sampled query gets run on the database and queries that return the same rows count as the same answer
-the answer with the most votes wins
-the gold answer is never looked at while voting so this is a fair inference time method
-runs on the mac after the seed runs are scored
-
 voting rules fixed before seeing any self consistency results
   candidates     the query from each seed
   same answer    same rows returned ignoring row order
@@ -18,25 +11,6 @@ voting rules fixed before seeing any self consistency results
   all failed     seed 42s query stands since its the original baseline
   sensitivity    the same vote with ties going to the earliest seed instead gets reported too
                  along with how many questions a tie actually decided
-
-a quirk of the official scorer worth knowing
-  ex strips every DISTINCT before running queries including the one inside COUNT(DISTINCT x)
-  the vote runs queries as written so two queries in the same group can still score differently on ex
-  that means picking which query to use inside a group can flip ex even though the answer didnt change
-  so the main table also counts fixes and breaks that came only from that choice
-  and a keep baseline row shows the vote when seed 42s query is kept whenever its in the winning group
-  under that rule ex only changes when the vote really switches to a different answer
-
-what it writes
-  outputs/runs/<name>-sc<N>.jsonl plus a config so scoring.py can score it like any other run
-  outputs/selfConsistency/ with the vote details and a selfConsistency.md holding
-    main result     baseline vs voted vs the upper bound where at least one candidate is right
-                    with the gain and a 95 percent interval from resampling gold queries
-    by difficulty   the same split by difficulty
-    scaling         voted accuracy for every subset size averaged over every subset of seeds
-    agreement       accuracy by how many candidates agreed which is the confidence signal
-    cost            tokens and generation time for N samples vs one
-    examples        questions the vote fixed and questions it broke
 
 how to run
     python src/selfConsistency.py
