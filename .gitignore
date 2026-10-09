@@ -11,3 +11,5 @@ __pycache__/
 *.bbl
 *.blg
 *.out
+report/
+quickcheck.py
